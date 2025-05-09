@@ -1,0 +1,24 @@
+// lvji.xcconfig - 用于主项目的配置文件
+PRODUCT_BUNDLE_IDENTIFIER = com.example.lvji
+PRODUCT_NAME = lvji
+PRODUCT_BUNDLE_PACKAGE_TYPE = APPL
+DEVELOPMENT_LANGUAGE = en
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_KEY_CFBundleDisplayName = 旅迹
+INFOPLIST_KEY_NSCameraUsageDescription = 用于拍照标记位置
+INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = 用于标记照片位置和朋友位置共享
+INFOPLIST_KEY_NSPhotoLibraryUsageDescription = 用于保存位置标记的照片
+INFOPLIST_KEY_UIRequiredDeviceCapabilities = armv7
+INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES
+INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES
+INFOPLIST_KEY_LSRequiresIPhoneOS = YES
+CODE_SIGN_STYLE = Automatic
+CODE_SIGNING_REQUIRED = NO
+CODE_SIGNING_ALLOWED = YES
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM = 
+SWIFT_VERSION = 5.0
+ENABLE_BITCODE = NO 
