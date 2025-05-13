@@ -15,19 +15,18 @@ struct FriendsListView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section(header: Text("好友").font(.headline)) {
-                    ForEach(friends) { friend in
-                        NavigationLink(destination: FriendDetailView(friend: friend)) {
-                            FriendRow(friend: friend)
-                        }
-                    }
-                }
-                
-                Section(header: Text("共享照片").font(.headline)) {
-                    SharedPhotosView(photos: sharedPhotos)
-                }
-                
                 Section(header: Text("路线规划").font(.headline)) {
+                    NavigationLink(destination: Text("个人旅行计划界面")) {
+                        HStack {
+                            Image(systemName: "map.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(.blue)
+                            Text("个人旅行计划")
+                                .font(.headline)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
                     NavigationLink(destination: Text("路线规划界面")) {
                         HStack {
                             Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
@@ -39,8 +38,20 @@ struct FriendsListView: View {
                         .padding(.vertical, 8)
                     }
                 }
+                
+                Section(header: Text("好友").font(.headline)) {
+                    ForEach(friends) { friend in
+                        NavigationLink(destination: FriendDetailView(friend: friend)) {
+                            FriendRow(friend: friend)
+                        }
+                    }
+                }
+                
+                Section(header: Text("共享照片").font(.headline)) {
+                    SharedPhotosView(photos: sharedPhotos)
+                }
             }
-            .navigationTitle("社交")
+            .navigationTitle("奔赴")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {

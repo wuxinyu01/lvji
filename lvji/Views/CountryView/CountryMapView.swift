@@ -95,7 +95,7 @@ struct CountryMapView: View {
                     .padding(.bottom, 30)
                 }
             }
-            .navigationTitle("地图")
+            .navigationTitle("旅迹")
             .searchable(text: $searchText, prompt: "搜索地点")
             .onChange(of: searchText) { _, newValue in
                 if !newValue.isEmpty {
