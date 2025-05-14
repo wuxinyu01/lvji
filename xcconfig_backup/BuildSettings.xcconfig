@@ -1,0 +1,37 @@
+// BuildSettings.xcconfig
+PRODUCT_NAME = lvji
+PRODUCT_BUNDLE_IDENTIFIER = com.example.lvji
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+MARKETING_VERSION = 1.0
+CURRENT_PROJECT_VERSION = 1
+IPHONEOS_DEPLOYMENT_TARGET = 18.4
+
+// 多架构支持
+ARCHS = arm64 x86_64
+VALID_ARCHS = arm64 x86_64
+ONLY_ACTIVE_ARCH = NO
+
+// Info.plist 设置 - 使用自动生成的Info.plist
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_FILE = 
+USE_GENERATED_INFOPLIST_FILE = YES
+
+// Info.plist内容 - 以下设置会合并到Info.plist
+INFOPLIST_KEY_CFBundleDisplayName = 旅迹
+INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES
+INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES
+INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+INFOPLIST_KEY_UIRequiredDeviceCapabilities = armv7
+INFOPLIST_KEY_UILaunchScreen_Generation = YES
+INFOPLIST_KEY_NSCameraUsageDescription = 用于拍照标记位置
+INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = 用于标记照片位置和朋友位置共享
+INFOPLIST_KEY_NSPhotoLibraryUsageDescription = 用于保存位置标记的照片
+
+// 代码签名设置
+CODE_SIGN_STYLE = Automatic
+CODE_SIGNING_REQUIRED = NO
+CODE_SIGNING_ALLOWED = YES
+CODE_SIGN_IDENTITY = -
+
+// Swift版本
+SWIFT_VERSION = 5.0 

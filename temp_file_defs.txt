@@ -1,0 +1,2 @@
+		4D95C21E41D04E46A377785C /* PhotoCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCaptureView.swift; sourceTree = "<group>"; };
+		64DD59FDB97F44789D7E37AA /* LocationPhotoAlbumView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPhotoAlbumView.swift; sourceTree = "<group>"; };

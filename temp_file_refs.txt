@@ -1,0 +1,2 @@
+		4D95C21E41D04E46A377785C /* PhotoCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D95C21E41D04E46A377785C /* PhotoCaptureView.swift */; };
+		64DD59FDB97F44789D7E37AA /* LocationPhotoAlbumView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DD59FDB97F44789D7E37AA /* LocationPhotoAlbumView.swift */; };
