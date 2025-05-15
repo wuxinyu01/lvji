@@ -8,8 +8,30 @@
 import SwiftUI
 import MapKit
 
+// Import dependencies for Apple Maps styling
+import CoreLocation
+// 使用来自 ColorExtensions.swift 的集中管理的颜色定义
+// Note: Swift 会自动将项目中所有的 .swift 文件包含在一起，所以不需要显式导入
+
 // 定义全局变量，以避免对FriendsListView中变量的引用
 let sampleFriendsCount = 5
+
+// 简化版 MapStyleUtility 结构体，仅用于当前文件，重命名避免冲突
+fileprivate struct ProfileMapStyleUtility {
+    /// 确保使用浅色UI模式，避免地图在深色模式下出现红色背景
+    static func enforceLightMode() {
+        #if os(iOS)
+        // 使用现代API设置浅色模式，避免使用已废弃的方法
+        if let windowScenes = UIApplication.shared.connectedScenes as? Set<UIWindowScene> {
+            for windowScene in windowScenes {
+                windowScene.windows.forEach { window in
+                    window.overrideUserInterfaceStyle = .light
+                }
+            }
+        }
+        #endif
+    }
+}
 
 struct UserProfileView: View {
     @State private var showingEditProfile = false
@@ -242,12 +264,14 @@ struct PhotosMapView: View {
                 ForEach(photoLocations) { location in
                     Marker(coordinate: location.coordinate) {
                         Image(systemName: "photo")
-                            .tint(.blue)
+                            .tint(Color.navigationRouteColor)
                     }
                     .tag(location)
                 }
             }
             .mapStyle(.standard)
+            .preferredColorScheme(.light) // 强制浅色模式
+            .tint(Color.navigationRouteColor) // 使用深蓝色导航线条
             .edgesIgnoringSafeArea(.all)
             .navigationTitle("照片地图")
             .navigationBarTitleDisplayMode(.inline)
@@ -257,6 +281,10 @@ struct PhotosMapView: View {
                         dismiss()
                     }
                 }
+            }
+            .onAppear {
+                // 确保使用浅色模式
+                ProfileMapStyleUtility.enforceLightMode()
             }
         }
     }

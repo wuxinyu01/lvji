@@ -467,7 +467,7 @@ struct MessageView: View {
                         }
                     }
                 }
-                .onChange(of: messages.count) { _ in
+                .onChange(of: messages.count) { 
                     if let lastMessage = messages.last {
                         withAnimation {
                             scrollView.scrollTo(lastMessage.id, anchor: .bottom)

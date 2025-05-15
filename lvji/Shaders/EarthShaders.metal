@@ -90,12 +90,10 @@ vertex VertexOutput earthVertexShader(VertexInput in [[stage_in]],
 constant float3 rayleighCoefficient = float3(5.8e-6, 13.5e-6, 33.1e-6); // 分子散射系数
 constant float mieCoefficient = 21e-6;                                    // 米氏散射系数
 constant float3 sunLight = float3(1.0, 0.95, 0.9) * 20.0;                // 阳光颜色和强度
-constant float sunAngularDiameterCos = 0.999;                            // 太阳角直径余弦
 
 // 计算大气散射
 float3 computeAtmosphericScattering(float3 rayDirection, float3 sunDirection, float atmosphereDensity) {
     float sunE = saturate(dot(sunDirection, rayDirection));
-    float sunfade = 1.0 - saturate(1.0 - exp((sunDirection.y / 450000.0)));
     float rayleighCoeff = rayleighCoefficient.y * atmosphereDensity; // 使用绿色通道系数，重命名局部变量
     
     // 日出/日落效果

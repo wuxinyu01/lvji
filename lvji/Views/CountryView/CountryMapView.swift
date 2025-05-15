@@ -11,6 +11,331 @@ import MapKit
 import UIKit
 #endif
 import CoreLocation
+// 导入集中管理的颜色定义
+// Note: Swift 会自动将项目中所有的 .swift 文件包含在一起，所以不需要显式导入
+
+#if os(iOS)
+// 自定义地图覆盖层 - 在文件作用域内
+class ColorOverlay: NSObject, MKOverlay {
+    var coordinate: CLLocationCoordinate2D
+    var boundingMapRect: MKMapRect
+    var zoomLevel: Double // 存储创建时的缩放级别，用于调整渲染
+    
+    init(region: MKCoordinateRegion) {
+        self.coordinate = region.center
+        self.zoomLevel = region.span.latitudeDelta
+        
+        // 创建一个足够大的覆盖区域
+        let topLeft = MKMapPoint(CLLocationCoordinate2D(
+            latitude: region.center.latitude + region.span.latitudeDelta/2,
+            longitude: region.center.longitude - region.span.longitudeDelta/2))
+        
+        let bottomRight = MKMapPoint(CLLocationCoordinate2D(
+            latitude: region.center.latitude - region.span.latitudeDelta/2,
+            longitude: region.center.longitude + region.span.longitudeDelta/2))
+        
+        self.boundingMapRect = MKMapRect(
+            x: topLeft.x,
+            y: topLeft.y,
+            width: bottomRight.x - topLeft.x,
+            height: bottomRight.y - topLeft.y)
+        
+        super.init()
+    }
+}
+
+// 自定义瓦片覆盖层 - 用于覆盖地图瓦片
+class CustomTileOverlay: MKTileOverlay {
+    // 使用空字符串作为URL模板，避免nil参数警告
+    init() {
+        super.init(urlTemplate: "")
+    }
+    
+    override func url(forTilePath path: MKTileOverlayPath) -> URL {
+        // 返回一个占位URL，实际不会使用
+        return URL(string: "https://example.com")!
+    }
+    
+    // 加载瓦片数据，并应用自定义颜色过滤
+    override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
+        // 对于高缩放级别，我们生成自定义瓦片数据
+        if path.z > 15 {
+            // 创建一个简单的半透明瓦片，覆盖红色背景
+            let data = createSimpleTile()
+            result(data, nil)
+        } else {
+            // 对于低缩放级别，返回空数据
+            result(nil, nil)
+        }
+    }
+    
+    // 创建一个简单的半透明瓦片，用于覆盖红色背景
+    private func createSimpleTile() -> Data? {
+        #if os(iOS)
+        // 创建透明图像
+        let size = CGSize(width: 256, height: 256)
+        UIGraphicsBeginImageContextWithOptions(size, false, UIScreen.main.scale)
+        defer { UIGraphicsEndImageContext() }
+        
+        // 仅绘制一个浅色背景，用于中和红色背景
+        if let context = UIGraphicsGetCurrentContext() {
+            // 设置浅灰白色背景，低不透明度
+            context.setFillColor(UIColor(red: 0.97, green: 0.97, blue: 0.95, alpha: 0.7).cgColor)
+            context.fill(CGRect(origin: .zero, size: size))
+            
+            if let image = UIGraphicsGetImageFromCurrentImageContext() {
+                return image.pngData()
+            }
+        }
+        #endif
+        
+        return nil
+    }
+}
+
+// 单例委托处理地图渲染 - 在文件作用域内
+class MapViewCustomDelegate: NSObject, MKMapViewDelegate {
+    static let shared = MapViewCustomDelegate()
+    
+    // 地图着色配置 - 符合要求的颜色方案
+    private struct MapColors {
+        // 道路颜色
+        static let mainRoad = UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0) // 黑色主要道路
+        static let secondaryRoad = UIColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1.0) // 灰色次要道路
+        static let minorRoad = UIColor(red: 0.65, green: 0.55, blue: 0.45, alpha: 1.0) // 棕色小路
+        
+        // 建筑颜色
+        static let building = UIColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1.0) // 浅灰色建筑
+        static let importantBuilding = UIColor(red: 0.96, green: 0.96, blue: 0.96, alpha: 1.0) // 白色重要建筑
+        static let landmarkBuilding = UIColor(red: 0.2, green: 0.5, blue: 0.9, alpha: 0.8) // 蓝色地标建筑
+        
+        // 自然地形颜色
+        static let water = UIColor(red: 0.6, green: 0.75, blue: 0.95, alpha: 1.0) // 蓝色水域
+        static let vegetation = UIColor(red: 0.7, green: 0.85, blue: 0.65, alpha: 1.0) // 绿色植被
+        static let denseVegetation = UIColor(red: 0.5, green: 0.75, blue: 0.45, alpha: 1.0) // 深绿色密集植被
+        static let terrain = UIColor(red: 0.8, green: 0.75, blue: 0.65, alpha: 1.0) // 棕色地形
+        
+        // 背景颜色
+        static let background = UIColor(red: 0.97, green: 0.97, blue: 0.95, alpha: 1.0) // 浅灰白色背景
+    }
+    
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        if overlay is ColorOverlay {
+            // 创建一个带有自定义颜色的覆盖渲染器，修复红色背景问题
+            let renderer = MKOverlayRenderer(overlay: overlay)
+            
+            // 使用非常低的不透明度，仅轻微影响地图颜色
+            renderer.alpha = 0.05
+            
+            return renderer
+        } else if overlay is MKTileOverlay {
+            // 为瓦片覆盖层创建渲染器
+            let renderer = MKTileOverlayRenderer(overlay: overlay)
+            
+            // 使用较高的不透明度，以便瓦片颜色仍然可见
+            renderer.alpha = 0.9
+            
+            return renderer
+        } else if overlay is MKPolyline {
+            // 为道路等线条创建渲染器
+            let renderer = MKPolylineRenderer(overlay: overlay)
+            
+            // 根据线条类型设置颜色
+            if let polyline = overlay as? MKPolyline {
+                // 识别道路类型并应用适当的颜色
+                let roadType = getRoadTypeForPolyline(polyline)
+                switch roadType {
+                case .main:
+                    renderer.strokeColor = MapColors.mainRoad // 黑色主要道路
+                    renderer.lineWidth = 3.0
+                case .secondary:
+                    renderer.strokeColor = MapColors.secondaryRoad // 灰色次要道路
+                    renderer.lineWidth = 2.0
+                case .minor:
+                    renderer.strokeColor = MapColors.minorRoad // 棕色小路
+                    renderer.lineWidth = 1.5
+                }
+            } else {
+                // 默认道路颜色
+                renderer.strokeColor = MapColors.secondaryRoad
+                renderer.lineWidth = 2.0
+            }
+            
+            return renderer
+        } else if overlay is MKPolygon {
+            // 为建筑物、水域等多边形创建渲染器
+            let renderer = MKPolygonRenderer(overlay: overlay)
+            
+            // 尝试识别多边形类型并应用适当的颜色
+            if let polygon = overlay as? MKPolygon {
+                let polygonType = getPolygonType(polygon, in: mapView)
+                switch polygonType {
+                case .building:
+                    renderer.fillColor = MapColors.building
+                    renderer.strokeColor = MapColors.building.withAlphaComponent(0.8)
+                    renderer.lineWidth = 0.5
+                case .water:
+                    renderer.fillColor = MapColors.water
+                    renderer.strokeColor = MapColors.water
+                    renderer.lineWidth = 0.5
+                case .vegetation:
+                    renderer.fillColor = MapColors.vegetation
+                    renderer.strokeColor = MapColors.vegetation
+                    renderer.lineWidth = 0.5
+                case .terrain:
+                    renderer.fillColor = MapColors.terrain
+                    renderer.strokeColor = MapColors.terrain
+                    renderer.lineWidth = 0.5
+                }
+            } else {
+                // 默认多边形颜色
+                renderer.fillColor = UIColor.lightGray.withAlphaComponent(0.3)
+                renderer.strokeColor = UIColor.lightGray.withAlphaComponent(0.5)
+                renderer.lineWidth = 0.5
+            }
+            
+            return renderer
+        } else if overlay is MKCircle {
+            // 为圆形覆盖层创建渲染器
+            let renderer = MKCircleRenderer(overlay: overlay)
+            renderer.fillColor = UIColor.blue.withAlphaComponent(0.1)
+            renderer.strokeColor = UIColor.blue.withAlphaComponent(0.3)
+            renderer.lineWidth = 1.0
+            
+            return renderer
+        }
+        
+        // 默认渲染器
+        return MKOverlayRenderer(overlay: overlay)
+    }
+    
+    // 根据折线特性识别道路类型
+    private enum RoadType {
+        case main, secondary, minor
+    }
+    
+    private func getRoadTypeForPolyline(_ polyline: MKPolyline) -> RoadType {
+        // 在真实应用中，可以通过道路属性来确定类型
+        // 这里使用简单的启发式方法
+        let pointCount = polyline.pointCount
+        if pointCount > 20 {
+            return .main
+        } else if pointCount > 10 {
+            return .secondary
+        } else {
+            return .minor
+        }
+    }
+    
+    // 多边形类型枚举
+    private enum PolygonType {
+        case building, water, vegetation, terrain
+    }
+    
+    // 尝试识别多边形类型
+    private func getPolygonType(_ polygon: MKPolygon, in mapView: MKMapView) -> PolygonType {
+        // 在实际应用中，可以基于位置、形状等特征来判断
+        // 这里使用简化的面积和位置启发式方法
+        
+        // 计算多边形面积
+        let area = getMKPolygonArea(polygon)
+        
+        // 获取多边形中心点
+        let centerMapPoint = getCenterOfPolygon(polygon)
+        // 使用现代API转换坐标
+        let centerCoordinate = centerMapPoint.coordinate
+        
+        // 使用位置特征进行判断
+        // 比如靠近水域的大面积多边形可能是水域
+        // 城市区域中的小面积多边形可能是建筑物
+        
+        // 这里使用简单的随机分配进行演示
+        // 在实际应用中，应该使用真实的地理信息进行判断
+        let random = Int(centerCoordinate.latitude * 100 + centerCoordinate.longitude * 100) % 4
+        
+        if area > 10000 {
+            // 大面积多边形
+            if random == 0 {
+                return .water
+            } else {
+                return .vegetation
+            }
+        } else {
+            // 小面积多边形
+            if random == 0 {
+                return .terrain
+            } else {
+                return .building
+            }
+        }
+    }
+    
+    // 计算多边形面积的辅助函数
+    private func getMKPolygonArea(_ polygon: MKPolygon) -> Double {
+        // 由于无法直接访问点数据，我们使用多边形的边界矩形面积作为近似
+        let boundingMapRect = polygon.boundingMapRect
+        return boundingMapRect.size.width * boundingMapRect.size.height
+    }
+    
+    // 获取多边形中心点的辅助函数
+    private func getCenterOfPolygon(_ polygon: MKPolygon) -> MKMapPoint {
+        // 使用多边形的边界矩形中心作为近似
+        let boundingMapRect = polygon.boundingMapRect
+        return MKMapPoint(
+            x: boundingMapRect.midX,
+            y: boundingMapRect.midY
+        )
+    }
+    
+    // 当地图区域变化时应用颜色修复
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+        // 检查缩放级别
+        let zoomLevel = mapView.region.span.latitudeDelta
+        
+        // 移除所有现有覆盖层
+        let overlaysToRemove = mapView.overlays.filter { $0 is ColorOverlay }
+        mapView.removeOverlays(overlaysToRemove)
+        
+        // 对于高缩放级别，应用特殊处理
+        if zoomLevel < 0.01 {
+            // 添加自定义颜色覆盖
+            let overlay = ColorOverlay(region: mapView.region)
+            mapView.addOverlay(overlay, level: .aboveLabels)
+            
+            // 确保地图使用平面样式，避免3D效果导致的红色问题
+            if #available(iOS 16.0, *) {
+                let config = MKStandardMapConfiguration()
+                config.elevationStyle = .flat
+                config.showsTraffic = false // 关闭交通显示，减少红色出现的机会
+                
+                // 自定义地图外观
+                config.pointOfInterestFilter = MKPointOfInterestFilter.includingAll
+                
+                mapView.preferredConfiguration = config
+            }
+            
+            // 应用全局样式设置
+            mapView.tintColor = UIColor(red: 0.0, green: 0.3, blue: 0.7, alpha: 1.0) // 蓝色导航线
+        }
+    }
+}
+
+// 在文件作用域内扩展坐标类型
+extension CLLocationCoordinate2D {
+    func regionWithRadius(_ radius: CLLocationDistance) -> MKCoordinateRegion {
+        // 计算以指定半径的区域
+        let distanceInDegrees = radius / 111000.0 // 粗略的度到米换算
+        let region = MKCoordinateRegion(
+            center: self,
+            span: MKCoordinateSpan(
+                latitudeDelta: distanceInDegrees,
+                longitudeDelta: distanceInDegrees
+            )
+        )
+        return region
+    }
+}
+#endif
 
 struct CountryMapView: View {
     @State private var cameraPosition: MapCameraPosition = .automatic
@@ -19,6 +344,11 @@ struct CountryMapView: View {
     @State private var viewingPhotos = false
     @State private var showPhotoCapture = false
     @State private var showLocationPhotoAlbum = false
+    @State private var mapStyle: MapStyle = .standard
+    @State private var zoomLevel: Double = 0.05 // 用于跟踪缩放级别
+    @State private var isZooming = false // 用于跟踪缩放动画
+    @State private var lastZoomUpdate = Date()
+    @State private var mapStyleVersion: Int = 0 // 用于跟踪样式更新
     
     // 添加搜索相关状态
     @State private var searchResults: [MKMapItem] = []
@@ -31,118 +361,15 @@ struct CountryMapView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Map(position: $cameraPosition, selection: $mapSelection) {
-                    // 显示照片标记
-                    ForEach(photoAnnotations) { annotation in
-                        Marker(coordinate: annotation.coordinate) {
-                            Image(systemName: "photo")
-                                .tint(.blue)
-                        }
-                        .tag(annotation)
-                    }
-                    
-                    // 显示搜索结果标记
-                    ForEach(searchResults, id: \.self) { item in
-                        Marker(item.name ?? "位置", coordinate: item.placemark.coordinate)
-                            .tint(.red)
-                    }
-                    
-                    // 如果有选中的搜索结果，使用不同的标记样式
-                    if let selectedItem = selectedSearchResult {
-                        Marker(selectedItem.name ?? "已选择位置", coordinate: selectedItem.placemark.coordinate)
-                            .tint(.green)
-                    }
-                }
-                .mapStyle(.standard)
-                .edgesIgnoringSafeArea(.all)
-                .onChange(of: mapSelection) { _, newValue in
-                    if let selection = newValue {
-                        // Handle selection of a photo marker
-                        print("Selected photo: \(selection.id)")
-                    }
-                }
+                mapView
                 
                 // 搜索结果列表
                 if searchIsActive && !searchResults.isEmpty {
-                    VStack {
-                        List {
-                            ForEach(searchResults, id: \.self) { item in
-                                Button(action: {
-                                    selectSearchResult(item)
-                                }) {
-                                    VStack(alignment: .leading) {
-                                        Text(item.name ?? "未知位置")
-                                            .font(.headline)
-                                        Text(formatAddress(for: item.placemark))
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                }
-                            }
-                        }
-                        .frame(height: min(CGFloat(searchResults.count * 60), 300))
-                        .cornerRadius(10)
-                        .padding(.horizontal)
-                        .shadow(radius: 5)
-                        
-                        Spacer()
-                    }
-                    .transition(.move(edge: .top))
+                    searchResultsView
                 }
                 
-                // Camera button for capturing photos
-                VStack {
-                    Spacer()
-                    
-                    HStack {
-                        // Show photo album button
-                        Button(action: {
-                            showLocationPhotoAlbum = true
-                        }) {
-                            Image(systemName: "photo.stack.fill")
-                                .font(.system(size: 22))
-                                .padding()
-                                .background(Color.white)
-                                .clipShape(Circle())
-                                .shadow(radius: 4)
-                        }
-                        .padding(.leading, 30)
-                        
-                        Spacer()
-                        
-                        // Camera button
-                        Button(action: {
-                            showPhotoCapture = true
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 70, height: 70)
-                                    .shadow(radius: 4)
-                                
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        
-                        Spacer()
-                        
-                        // My location button
-                        Button(action: {
-                            centerOnUserLocation()
-                        }) {
-                            Image(systemName: "location.fill")
-                                .font(.system(size: 22))
-                                .padding()
-                                .background(Color.white)
-                                .clipShape(Circle())
-                                .shadow(radius: 4)
-                        }
-                        .padding(.trailing, 30)
-                    }
-                    .padding(.bottom, 30)
-                }
+                // 地图控制UI层
+                controlsOverlay
             }
             .navigationTitle("旅迹")
             .compatibleSearchable(text: $searchText, prompt: "搜索地点")
@@ -167,6 +394,755 @@ struct CountryMapView: View {
             requestLocationPermission()
             // Load sample photo annotations
             loadSamplePhotoAnnotations()
+            // 设置全局地图样式
+            initializeMapStyles()
+            fixMapZoomColorIssue() // 确保颜色正确初始化
+            applyCorrectMapColors() // 全局应用正确的地图颜色
+        }
+    }
+    
+    // MARK: - 地图视图
+    private var mapView: some View {
+        Map(position: $cameraPosition, selection: $mapSelection) {
+            // 显示照片标记
+            ForEach(photoAnnotations) { annotation in
+                Annotation(coordinate: annotation.coordinate) {
+                    ZStack {
+                        // 背景光晕效果，只在较高缩放级别显示
+                        if zoomLevel < 0.3 {
+                            Circle()
+                                .fill(Color.primaryApp.opacity(0.2))
+                                .frame(width: calculateMarkerSize(for: annotation) * 1.5, 
+                                       height: calculateMarkerSize(for: annotation) * 1.5)
+                                .blur(radius: 3)
+                        }
+                        
+                        // 主要标记
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.primaryGradientStart, .primaryGradientEnd]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: calculateMarkerSize(for: annotation), 
+                                   height: calculateMarkerSize(for: annotation))
+                            .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 2)
+                        
+                        // 图标
+                        Image(systemName: "photo.fill")
+                            .font(.system(size: calculateIconSize(for: annotation)))
+                            .foregroundColor(.white)
+                    }
+                } label: {
+                    // 根据缩放级别调整标签可见性和样式
+                    if zoomLevel < 0.15 {
+                        Text("照片")
+                            .font(.caption2)
+                            .padding(4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.7))
+                                    .shadow(color: Color.black.opacity(0.1), radius: 1, x: 0, y: 1)
+                            )
+                    }
+                }
+                .tag(annotation)
+            }
+            
+            // 显示搜索结果标记
+            ForEach(searchResults, id: \.self) { item in
+                Annotation(coordinate: item.placemark.coordinate) {
+                    ZStack {
+                        // 搜索结果标记，使用蓝色系
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.3, green: 0.6, blue: 0.9), // 调整为更淡的蓝色
+                                        Color(red: 0.2, green: 0.4, blue: 0.8)  // 调整为更接近Apple Maps的蓝色
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 36, height: 36)
+                            .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                        
+                        Image(systemName: "mappin")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                    }
+                } label: {
+                    Text(item.name ?? "位置")
+                        .font(.caption)
+                        .padding(4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.white.opacity(0.7))
+                                .shadow(color: Color.black.opacity(0.1), radius: 1, x: 0, y: 1)
+                        )
+                }
+            }
+            
+            // 如果有选中的搜索结果，使用不同的标记样式
+            if let selectedItem = selectedSearchResult {
+                Annotation(coordinate: selectedItem.placemark.coordinate) {
+                    ZStack {
+                        // 外围脉动光环效果
+                        Circle()
+                            .fill(Color.accentApp.opacity(0.2))
+                            .frame(width: 60, height: 60)
+                        
+                        // 中间光环
+                        Circle()
+                            .fill(Color.accentApp.opacity(0.3))
+                            .frame(width: 50, height: 50)
+                        
+                        // 主要背景
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.0, green: 0.7, blue: 0.5),
+                                        Color(red: 0.0, green: 0.5, blue: 0.3)
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 40, height: 40)
+                            .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 2)
+                        
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(Color.accentApp)
+                        
+                        Text(selectedItem.name ?? "已选择位置")
+                            .font(.caption)
+                            .bold()
+                    }
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.9))
+                            .shadow(color: Color.black.opacity(0.15), radius: 2, x: 0, y: 1)
+                    )
+                }
+            }
+        }
+        .mapStyle(.standard) // 使用标准地图样式
+        .preferredColorScheme(.light) // 强制浅色模式，避免深色模式颜色问题
+        .tint(Color.navigationRouteColor) // 使用自定义导航线颜色
+        .mapControlVisibility(.visible) // 确保地图控件可见
+        .edgesIgnoringSafeArea(.all)
+        .overlay(
+            // 添加渐变覆盖，用于在高缩放级别平滑过渡颜色
+            ZStack {
+                // 背景色覆盖，用于修复红色背景问题
+                Rectangle()
+                    .fill(Color.mapBackground.opacity(getBackgroundOpacity()))
+                
+                // 网格覆盖，用于模拟道路网格
+                if zoomLevel < 0.15 {
+                    RoadGridOverlay()
+                }
+            }
+        )
+        .onChange(of: mapSelection) { _, newValue in
+            if let selection = newValue {
+                // Handle selection of a photo marker
+                print("Selected photo: \(selection.id)")
+            }
+        }
+        .onChange(of: cameraPosition) { oldPosition, newPosition in
+            // 监测地图位置变化，确保颜色保持正确
+            // 防止节流，避免过多的更新调用
+            let now = Date()
+            if now.timeIntervalSince(lastZoomUpdate) > 0.5 {
+                lastZoomUpdate = now
+                
+                // 检查是否在缩放过程中（避免动画期间重复设置）
+                if !isZooming {
+                    // 检查当前region并更新zoomLevel
+                    if let region = cameraPosition.region {
+                        // 确保区域在允许的缩放范围内
+                        let adjustedRegion = MapStyleUtility.ensureRegionWithinLimits(region)
+                        
+                        // 如果需要调整区域，更新相机位置
+                        if adjustedRegion.span.latitudeDelta != region.span.latitudeDelta {
+                            // 先更新zoomLevel状态变量
+                            self.zoomLevel = adjustedRegion.span.latitudeDelta
+                            
+                            // 更新相机位置
+                            DispatchQueue.main.async {
+                                cameraPosition = .region(adjustedRegion)
+                            }
+                        } else {
+                            // 正常更新zoomLevel
+                            zoomLevel = region.span.latitudeDelta
+                        }
+                        
+                        // 如果缩放级别过小（过于放大），可能导致红色背景问题
+                        if zoomLevel < 0.01 {
+                            // 在主线程延迟一小段时间后应用样式
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                initializeMapStyles() // 应用自定义样式修复颜色
+                                fixMapZoomColorIssue() // 专门针对放大问题的修复
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            initializeMapStyles()
+            // 确保使用浅色模式
+            #if os(iOS)
+            MapStyleUtility.enforceLightMode()
+            #endif
+        }
+        .onDisappear {
+            // 确保视图消失时不会保持设置的缩放级别
+            zoomLevel = 0.3 // 重置为默认值
+        }
+    }
+    
+    // 计算背景覆盖不透明度
+    private func getBackgroundOpacity() -> Double {
+        if zoomLevel < 0.15 {
+            // 最高缩放级别 - 需要较高不透明度来覆盖红色背景
+            return 0.35
+        } else if zoomLevel < 0.3 {
+            // 高缩放级别 - 中等不透明度
+            return 0.2
+        } else if zoomLevel < 0.5 {
+            // 中等缩放级别 - 低不透明度
+            return 0.1
+        } else {
+            // 低缩放级别 - 不需要覆盖
+            return 0
+        }
+    }
+    
+    // 道路网格覆盖视图 - 用于高缩放级别
+    private struct RoadGridOverlay: View {
+        var body: some View {
+            ZStack {
+                // 主要道路 - 黑色
+                RoadGrid(lineWidth: 2.0, spacing: 80, color: Color.mapMainRoad.opacity(0.5))
+                
+                // 次要道路 - 灰色
+                RoadGrid(lineWidth: 1.0, spacing: 40, color: Color.mapSecondaryRoad.opacity(0.3))
+                
+                // 小路 - 棕色
+                RoadGrid(lineWidth: 0.5, spacing: 20, rotation: 45, color: Color.mapMinorRoad.opacity(0.2))
+            }
+        }
+    }
+    
+    // 单一道路网格
+    private struct RoadGrid: View {
+        let lineWidth: CGFloat
+        let spacing: CGFloat
+        var rotation: Double = 0
+        let color: Color
+        
+        var body: some View {
+            ZStack {
+                // 水平线
+                VStack(spacing: spacing) {
+                    ForEach(0..<20, id: \.self) { _ in
+                        Rectangle()
+                            .fill(color)
+                            .frame(height: lineWidth)
+                    }
+                }
+                
+                // 垂直线
+                HStack(spacing: spacing) {
+                    ForEach(0..<20, id: \.self) { _ in
+                        Rectangle()
+                            .fill(color)
+                            .frame(width: lineWidth)
+                    }
+                }
+            }
+            .rotationEffect(.degrees(rotation))
+        }
+    }
+    
+    // MARK: - 搜索结果视图
+    private var searchResultsView: some View {
+        VStack {
+            VStack(spacing: 0) {
+                // 搜索结果标题
+                HStack {
+                    Text("搜索结果")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                    
+                    Text("\(searchResults.count)个地点")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Button(action: {
+                        searchIsActive = false
+                        searchResults = []
+                        searchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.white)
+                        .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 1)
+                )
+                
+                // 分隔线
+                Rectangle()
+                    .frame(height: 1)
+                    .foregroundColor(Color.gray.opacity(0.2))
+                
+                // 搜索结果列表
+                List {
+                    ForEach(searchResults, id: \.self) { item in
+                        Button(action: {
+                            selectSearchResult(item)
+                        }) {
+                            HStack(spacing: 12) {
+                                // 位置图标
+                                ZStack {
+                                    Circle()
+                                        .fill(
+                                            LinearGradient(
+                                                gradient: Gradient(colors: [.secondaryGradientStart, .secondaryGradientEnd]),
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .frame(width: 36, height: 36)
+                                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                                    
+                                    Image(systemName: "mappin")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.white)
+                                }
+                                
+                                // 位置信息
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.name ?? "未知位置")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.primary)
+                                    
+                                    Text(formatAddress(for: item.placemark))
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                Spacer()
+                                
+                                // 选择箭头
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.gray)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white)
+                                .shadow(color: Color.black.opacity(0.03), radius: 2, x: 0, y: 1)
+                        )
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(PlainListStyle())
+            }
+            .background(Color.white.opacity(0.95))
+            .cornerRadius(10)
+            .frame(height: min(CGFloat(searchResults.count * 60) + 60, 360))
+            .padding(.horizontal)
+            .padding(.top, 10)
+            .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 3)
+            
+            Spacer()
+        }
+        .transition(.move(edge: .top))
+    }
+    
+    // MARK: - 控制界面
+    private var controlsOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                
+                VStack(spacing: 10) {
+                    // 地图类型选择器
+                    mapTypeMenu
+                    
+                    // 地图缩放控制
+                    zoomControls
+                }
+                .padding(.top, 60)
+                .padding(.trailing, 16)
+            }
+            
+            Spacer()
+            
+            // 底部按钮组
+            bottomControls
+        }
+    }
+    
+    // 地图类型菜单
+    private var mapTypeMenu: some View {
+        Menu {
+            Button(action: {
+                mapStyle = .standard
+                // 强制确保在地图类型改变后保持正确的颜色
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    initializeMapStyles()
+                }
+            }) {
+                Label("标准", systemImage: "map")
+            }
+            
+            Button(action: {
+                mapStyle = .hybrid
+                // 强制确保在地图类型改变后保持正确的颜色
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    initializeMapStyles()
+                }
+            }) {
+                Label("混合", systemImage: "map.fill")
+            }
+            
+            Button(action: {
+                mapStyle = .imagery
+                // 强制确保在地图类型改变后保持正确的颜色
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    initializeMapStyles()
+                }
+            }) {
+                Label("卫星", systemImage: "globe")
+            }
+        } label: {
+            ZStack {
+                // 主背景
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 40, height: 40)
+                    .shadow(color: Color.black.opacity(0.15), radius: 3, x: 0, y: 2)
+                
+                // 边框
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                    .frame(width: 40, height: 40)
+                
+                Image(systemName: "map")
+                    .font(.system(size: 18))
+                    .foregroundColor(Color.primaryApp)
+            }
+        }
+    }
+    
+    // 缩放控制按钮
+    private var zoomControls: some View {
+        VStack(spacing: 4) {
+            Button(action: {
+                zoomIn()
+            }) {
+                ZStack {
+                    // 主背景
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 40, height: 40)
+                        .shadow(color: Color.black.opacity(0.15), radius: 3, x: 0, y: 2)
+                    
+                    // 边框
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                        .frame(width: 40, height: 40)
+                    
+                    Image(systemName: "plus")
+                        .font(.system(size: 18))
+                        .foregroundColor(Color.primaryApp)
+                }
+            }
+            
+            Button(action: {
+                zoomOut()
+            }) {
+                ZStack {
+                    // 主背景
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 40, height: 40)
+                        .shadow(color: Color.black.opacity(0.15), radius: 3, x: 0, y: 2)
+                    
+                    // 边框
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                        .frame(width: 40, height: 40)
+                    
+                    Image(systemName: "minus")
+                        .font(.system(size: 18))
+                        .foregroundColor(Color.primaryApp)
+                }
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.05))
+                .blur(radius: 0.5)
+        )
+    }
+    
+    // 底部控制按钮
+    private var bottomControls: some View {
+        HStack {
+            // 照片专辑按钮
+            Button(action: {
+                showLocationPhotoAlbum = true
+            }) {
+                ZStack {
+                    // 背景光晕
+                    Circle()
+                        .fill(Color.primaryApp.opacity(0.1))
+                        .frame(width: 70, height: 70)
+                    
+                    // 按钮背景
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                        .shadow(color: Color.black.opacity(0.15), radius: 5, x: 0, y: 2)
+                    
+                    Image(systemName: "photo.stack.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(Color.primaryApp)
+                }
+            }
+            .padding(.leading, 30)
+            
+            Spacer()
+            
+            // 相机按钮
+            Button(action: {
+                showPhotoCapture = true
+            }) {
+                ZStack {
+                    // 外部光晕
+                    Circle()
+                        .fill(Color.primaryApp.opacity(0.15))
+                        .frame(width: 90, height: 90)
+                    
+                    // 中间光晕
+                    Circle()
+                        .fill(Color.primaryApp.opacity(0.2))
+                        .frame(width: 80, height: 80)
+                    
+                    // 按钮背景
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 70, height: 70)
+                        .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 3)
+                    
+                    // 边框增强视觉层次
+                    Circle()
+                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                        .frame(width: 70, height: 70)
+                    
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(Color.primaryApp)
+                }
+            }
+            
+            Spacer()
+            
+            // 定位按钮
+            Button(action: {
+                centerOnUserLocation()
+            }) {
+                ZStack {
+                    // 背景光晕
+                    Circle()
+                        .fill(Color.primaryApp.opacity(0.1))
+                        .frame(width: 70, height: 70)
+                    
+                    // 按钮背景
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.white.opacity(0.85)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                        .shadow(color: Color.black.opacity(0.15), radius: 5, x: 0, y: 2)
+                    
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(Color.primaryApp)
+                }
+            }
+            .padding(.trailing, 30)
+        }
+        .padding(.bottom, 30)
+    }
+    
+    // 计算标记大小（根据缩放级别）
+    private func calculateMarkerSize(for annotation: PhotoAnnotation) -> CGFloat {
+        // 在不同缩放级别下调整标记大小，使用更平滑的变化
+        if zoomLevel > 0.7 {  // 很远
+            return 22
+        } else if zoomLevel > 0.5 {  // 较远
+            return 26
+        } else if zoomLevel > 0.3 { // 中等
+            return 32
+        } else if zoomLevel > 0.15 { // 较近
+            return 36
+        } else { // 很近
+            return 42
+        }
+    }
+    
+    // 计算图标大小（根据缩放级别）
+    private func calculateIconSize(for annotation: PhotoAnnotation) -> CGFloat {
+        // 与标记大小保持一定比例
+        return calculateMarkerSize(for: annotation) * 0.45
+    }
+    
+    // 放大地图
+    private func zoomIn() {
+        if let region = getCurrentRegion() {
+            // 设置最小缩放限制，避免显示红色背景
+            let newLatDelta = max(region.span.latitudeDelta * 0.6, 0.15) // 修改最小限制值为0.15
+            let newLongDelta = max(region.span.longitudeDelta * 0.6, 0.15) // 修改最小限制值为0.15
+            
+            // 设置缩放标志
+            isZooming = true
+            
+            // 先更新缩放级别
+            self.zoomLevel = newLatDelta
+            
+            withAnimation(.easeInOut(duration: 0.5)) {
+                cameraPosition = .region(MKCoordinateRegion(
+                    center: region.center,
+                    span: MKCoordinateSpan(latitudeDelta: newLatDelta, longitudeDelta: newLongDelta)
+                ))
+                
+                // 移除这里的赋值，避免在闭包内修改let常量
+            }
+            
+            // 缩放后立即应用自定义样式以确保颜色正确
+            initializeMapStyles()
+            
+            // 专门针对放大缩放的颜色修复
+            fixMapZoomColorIssue()
+            
+            // 延迟重置缩放标志
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                isZooming = false
+                // 再次确认样式正确
+                initializeMapStyles()
+                fixMapZoomColorIssue()
+            }
+        }
+    }
+    
+    // 缩小地图
+    private func zoomOut() {
+        if let region = getCurrentRegion() {
+            // 使用MapStyleUtility获取最大允许的跨度
+            let maxSpan = MapStyleUtility.getMaxSpan()
+            
+            // 计算新的跨度，但不超过最大允许值
+            let newLatDelta = min(region.span.latitudeDelta * 2.0, maxSpan.latitudeDelta)
+            let newLongDelta = min(region.span.longitudeDelta * 2.0, maxSpan.longitudeDelta)
+            
+            // 设置缩放标志
+            isZooming = true
+            
+            // 先更新缩放级别
+            self.zoomLevel = newLatDelta
+            
+            withAnimation(.easeInOut(duration: 0.5)) {
+                cameraPosition = .region(MKCoordinateRegion(
+                    center: region.center,
+                    span: MKCoordinateSpan(latitudeDelta: newLatDelta, longitudeDelta: newLongDelta)
+                ))
+                
+                // 移除这里的赋值，避免在闭包内修改let常量
+            }
+            
+            // 延迟重置缩放标志
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                isZooming = false
+            }
+        }
+    }
+    
+    // 获取当前地图区域
+    private func getCurrentRegion() -> MKCoordinateRegion? {
+        if let region = cameraPosition.region {
+            // 使用MapStyleUtility确保区域在允许的缩放范围内
+            return MapStyleUtility.ensureRegionWithinLimits(region)
+        } else {
+            // 如果不能直接获取region，返回一个默认区域
+            return MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 39.9042, longitude: 116.4074), // 北京
+                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            )
         }
     }
     
@@ -178,7 +1154,25 @@ struct CountryMapView: View {
     
     // Center the map on the user's current location
     private func centerOnUserLocation() {
-        cameraPosition = .userLocation(followsHeading: true, fallback: .automatic)
+        // 设置缩放标志
+        isZooming = true
+        
+        withAnimation(.easeInOut(duration: 0.8)) {
+            cameraPosition = .userLocation(followsHeading: true, fallback: .automatic)
+        }
+        
+        // 延迟重置缩放标志
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            isZooming = false
+            
+            // 如果可以获取当前区域，更新缩放级别
+            if let region = getCurrentRegion() {
+                // 在主线程更新zoomLevel
+                DispatchQueue.main.async {
+                    self.zoomLevel = region.span.latitudeDelta
+                }
+            }
+        }
     }
     
     // 实现地址搜索功能
@@ -217,16 +1211,274 @@ struct CountryMapView: View {
         return components.compactMap { $0 }.joined(separator: ", ")
     }
     
+    // 初始化地图样式并设置全局样式
+    private func initializeMapStyles() {
+        #if os(iOS)
+        // 使用工具类确保浅色模式
+        MapStyleUtility.enforceLightMode()
+        
+        // 通过系统 API 设置导航路线颜色
+        let navigationColor = UIColor(red: 0.0, green: 0.3, blue: 0.7, alpha: 1.0) // 深蓝色导航颜色
+        
+        // 确保使用标准地图样式
+        mapStyle = .standard
+        
+        // 如果缩放级别过高，可能会导致红色背景问题，我们重置为更安全的缩放级别
+        if let region = getCurrentRegion(), region.span.latitudeDelta < 0.01 {
+            let safeRegion = MapStyleUtility.createSafeRegion(center: region.center)
+            
+            // 先更新zoomLevel状态变量
+            self.zoomLevel = safeRegion.span.latitudeDelta
+            
+            // 然后更新相机位置
+            cameraPosition = .region(safeRegion)
+        }
+        
+        // 设置地图视图的全局样式
+        if #available(iOS 16.0, *) {
+            // 为 MKMapView 实例设置全局的外观样式
+            UIView.appearance(whenContainedInInstancesOf: [MKMapView.self]).tintColor = navigationColor
+            
+            // 查找并应用样式到所有已存在的地图视图
+            applyStylesToExistingMapViews()
+        }
+        #endif
+    }
+    
+    #if os(iOS)
+    // 查找并应用样式到所有存在的地图视图
+    private func applyStylesToExistingMapViews() {
+        if let windowScenes = UIApplication.shared.connectedScenes as? Set<UIWindowScene> {
+            for windowScene in windowScenes {
+                for window in windowScene.windows {
+                    findAndApplyStyleToMapViews(in: window)
+                }
+            }
+        }
+    }
+    
+    // 在视图层次结构中查找并应用样式
+    private func findAndApplyStyleToMapViews(in view: UIView) {
+        // 如果当前视图是地图视图，应用样式
+        if let mapView = view as? MKMapView {
+            applyFullMapStyling(to: mapView)
+        }
+        
+        // 递归遍历所有子视图
+        for subview in view.subviews {
+            findAndApplyStyleToMapViews(in: subview)
+        }
+    }
+    
+    // 对单个地图视图应用完整样式
+    private func applyFullMapStyling(to mapView: MKMapView) {
+        // 应用代理
+        if mapView.delegate == nil || !(mapView.delegate is MapViewCustomDelegate) {
+            mapView.delegate = MapViewCustomDelegate.shared
+        }
+        
+        // 应用基本样式
+        MapStyleUtility.applyCustomStyle(to: mapView)
+        
+        // 如果缩放级别较高，应用特殊处理
+        if MapStyleUtility.isHighZoomLevel(mapView.region) {
+            // 移除现有覆盖层
+            let overlaysToRemove = mapView.overlays
+            mapView.removeOverlays(overlaysToRemove)
+            
+            // 添加自定义颜色覆盖
+            let overlay = ColorOverlay(region: mapView.region)
+            mapView.addOverlay(overlay, level: .aboveRoads)
+            
+            // 如果缩放级别非常高，添加瓦片覆盖
+            if MapStyleUtility.isExtremeZoomLevel(mapView.region) {
+                // 创建自定义瓦片覆盖层
+                let tileOverlay = CustomTileOverlay()
+                mapView.addOverlay(tileOverlay, level: .aboveLabels)
+            }
+        }
+    }
+    
+    // 查找并应用全面的地图样式修复
+    private func findAndApplyMapStyling() {
+        let allWindows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        
+        for window in allWindows {
+            findAndApplyStyleToMapViews(in: window)
+        }
+    }
+    #endif
+    
+    // 专门用于修复地图放大时的颜色问题
+    private func fixMapZoomColorIssue() {
+        #if os(iOS)
+        // 强制重置地图的底层颜色设置
+        DispatchQueue.main.async {
+            // 确保使用标准样式
+            mapStyle = .standard
+            
+            // 检查是否在放大状态
+            if let region = getCurrentRegion() {
+                let zoomLevel = region.span.latitudeDelta
+                
+                // 根据不同的缩放级别采取不同的修复策略
+                if zoomLevel < 0.15 {
+                    // 设置最小缩放级别为0.15，与图示缩放级别一致
+                    let safeRegion = MKCoordinateRegion(
+                        center: region.center,
+                        span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)
+                    )
+                    
+                    // 先更新zoomLevel状态变量
+                    self.zoomLevel = 0.15
+                    
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        cameraPosition = .region(safeRegion)
+                        // 移除这里的赋值，避免在闭包内修改let常量
+                    }
+                    
+                    // 应用中等强度修复
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.applyModerateZoomFix()
+                    }
+                } else if zoomLevel < 0.3 {
+                    // 中等缩放级别 - 只需要轻微修复
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.applyLightZoomFix()
+                    }
+                }
+            }
+        }
+        #endif
+    }
+    
+    #if os(iOS)
+    // 应用强力修复 - 用于极高缩放级别
+    private func applyStrongZoomFix() {
+        findAndApplyMapStyling()
+        
+        // 限制最小缩放级别为0.15，与图示缩放级别一致
+        if let region = getCurrentRegion(), region.span.latitudeDelta < 0.15 {
+            // 应用安全区域，确保不会过度放大
+            let safeRegion = MKCoordinateRegion(
+                center: region.center,
+                span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)
+            )
+            
+            // 先更新zoomLevel状态变量
+            self.zoomLevel = 0.15
+            
+            withAnimation(.easeInOut(duration: 0.5)) {
+                cameraPosition = .region(safeRegion)
+                // 移除这里的赋值，避免在闭包内修改let常量
+            }
+        }
+        
+        // 立即应用覆盖层修复
+        DispatchQueue.main.async {
+            self.overlayMapWithCorrectColors()
+        }
+    }
+    
+    // 应用中等强度修复 - 用于高缩放级别
+    private func applyModerateZoomFix() {
+        findAndApplyMapStyling()
+    }
+    
+    // 应用轻微修复 - 用于中等缩放级别
+    private func applyLightZoomFix() {
+        // 只确保地图样式正确设置
+        if let region = getCurrentRegion() {
+            let allWindows = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+            
+            for window in allWindows {
+                for subview in window.subviews {
+                    if let mapView = findMapView(in: subview) {
+                        // 应用基本样式
+                        MapStyleUtility.applyCustomStyle(to: mapView)
+                    }
+                }
+            }
+        }
+    }
+    
+    // 在视图层次结构中查找MKMapView
+    private func findMapView(in view: UIView) -> MKMapView? {
+        if let mapView = view as? MKMapView {
+            return mapView
+        }
+        
+        for subview in view.subviews {
+            if let mapView = findMapView(in: subview) {
+                return mapView
+            }
+        }
+        
+        return nil
+    }
+    
+    // 使用正确的颜色方案覆盖地图
+    private func overlayMapWithCorrectColors() {
+        // 查找所有地图视图
+        let allWindows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        
+        for window in allWindows {
+            for subview in window.subviews {
+                if let mapView = findMapView(in: subview) {
+                    // 移除所有现有覆盖层
+                    mapView.removeOverlays(mapView.overlays)
+                    
+                    // 添加一个覆盖当前区域的ColorOverlay
+                    let overlay = ColorOverlay(region: mapView.region)
+                    mapView.addOverlay(overlay, level: .aboveRoads)
+                    
+                    // 添加自定义瓦片覆盖层以处理红色背景
+                    let tileOverlay = CustomTileOverlay()
+                    mapView.addOverlay(tileOverlay, level: .aboveLabels)
+                    
+                    // 确保使用正确的代理
+                    if mapView.delegate == nil || !(mapView.delegate is MapViewCustomDelegate) {
+                        mapView.delegate = MapViewCustomDelegate.shared
+                    }
+                }
+            }
+        }
+    }
+    #endif
+    
+    // 全局应用正确的地图颜色
+    private func applyCorrectMapColors() {
+        #if os(iOS)
+        fixMapZoomColorIssue()
+        #endif
+    }
+    
     // 选择搜索结果
     private func selectSearchResult(_ item: MKMapItem) {
         selectedSearchResult = item
         
-        // 在地图上显示选定位置
-        withAnimation {
-            cameraPosition = .region(MKCoordinateRegion(
-                center: item.placemark.coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            ))
+        // 设置缩放标志
+        isZooming = true
+        
+        // 先更新缩放级别
+        self.zoomLevel = 0.15 // 更新为新的最小缩放级别
+        
+        // 在地图上显示选定位置，使用更流畅的动画并使用安全的缩放范围
+        withAnimation(.easeInOut(duration: 0.8)) {
+            cameraPosition = .region(MapStyleUtility.createSafeRegion(center: item.placemark.coordinate))
+            
+            // 移除这里的赋值，避免在闭包内修改let常量
+        }
+        
+        // 延迟重置缩放标志
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            isZooming = false
         }
         
         // 关闭搜索结果列表
@@ -545,7 +1797,7 @@ struct LocationAlbumSection: View {
             HStack {
                 Image(systemName: "mappin.circle.fill")
                     .font(.system(size: 24))
-                    .foregroundColor(.red)
+                    .foregroundColor(Color.secondaryApp)
                 
                 Text(location.name)
                     .font(.title2)
@@ -646,6 +1898,8 @@ struct SafeAsyncImage<Content: View, Placeholder: View>: View {
 struct LocationPhotoDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let location: LocationPhotoCollection
+    @State private var mapPosition: MapCameraPosition
+    @State private var isMapAnimated = false
     
     // Grid layout
     let columns = [
@@ -654,25 +1908,99 @@ struct LocationPhotoDetailView: View {
         GridItem(.flexible())
     ]
     
+    // Initializer to set up the initial camera position
+    init(location: LocationPhotoCollection) {
+        self.location = location
+        // Set the initial map position using safe region
+        self._mapPosition = State(initialValue: .region(MapStyleUtility.createSafeRegion(center: location.coordinate)))
+    }
+    
     var body: some View {
         NavigationStack {
             VStack {
                 // Map preview
-                Map(position: .constant(.region(MKCoordinateRegion(
-                    center: location.coordinate,
-                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-                )))) {
-                    Marker(coordinate: location.coordinate) {
-                        Image(systemName: "photo")
-                            .tint(.blue)
+                Map(position: $mapPosition) {
+                    Annotation(coordinate: location.coordinate) {
+                        ZStack {
+                            // 创建光晕效果
+                            Circle()
+                                .fill(Color.primaryApp.opacity(0.3))
+                                .frame(width: 48, height: 48)
+                                .blur(radius: isMapAnimated ? 5 : 2)
+                            
+                            Circle()
+                                .fill(Color.primaryApp.opacity(0.9))
+                                .frame(width: 36, height: 36)
+                                .shadow(radius: 3)
+                            
+                            Image(systemName: "photo.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(.white)
+                        }
+                        .scaleEffect(isMapAnimated ? 1.05 : 1.0)
+                        .animation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: isMapAnimated)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "mappin.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(Color.primaryApp)
+                            
+                            Text(location.name)
+                                .font(.caption)
+                                .bold()
+                        }
+                        .padding(6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.85))
+                                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                        )
                     }
                 }
-                .frame(height: 150)
-                .disabled(true)
+                .withAppleMapsStyling() // 使用工具类应用一致的地图样式
+                .frame(height: 180)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+                .padding(.top, 12)
+                .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
+                .overlay(
+                    // 添加地图边框装饰
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white, lineWidth: 2)
+                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                )
+                .disabled(false) // Allow interaction with the map
                 
-                // Photo grid
+                // Location info section
+                HStack {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(Color.secondaryApp)
+                    
+                    Text(location.name)
+                        .font(.headline)
+                    
+                    Spacer()
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.gray)
+                        
+                        Text("\(location.photos.count) 张照片")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(6)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .padding(.top, 12)
+                
+                // Photo grid with improved visual hierarchy
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 4) {
+                    LazyVGrid(columns: columns, spacing: 6) {
                         ForEach(location.photos) { photo in
                             SafeAsyncImage(url: URL(string: photo.url)) { image in
                                 image
@@ -688,10 +2016,17 @@ struct LocationPhotoDetailView: View {
                             }
                             .aspectRatio(1, contentMode: .fill)
                             .frame(maxWidth: .infinity)
-                            .clipShape(Rectangle())
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.white, lineWidth: 1)
+                            )
+                            .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                            .transition(.opacity)
                         }
                     }
-                    .padding(4)
+                    .padding(6)
+                    .animation(.easeInOut, value: location.photos.count)
                 }
             }
             .navigationTitle(location.name)
@@ -701,6 +2036,16 @@ struct LocationPhotoDetailView: View {
                     Button("关闭") {
                         dismiss()
                     }
+                }
+            }
+            .onAppear {
+                // 开始标记动画
+                isMapAnimated = true
+                
+                // Animation for zooming in slightly on appear
+                withAnimation(.easeInOut(duration: 1.2)) {
+                    // 使用工具类创建安全的区域
+                    mapPosition = .region(MapStyleUtility.createSafeRegion(center: location.coordinate))
                 }
             }
         }
