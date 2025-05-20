@@ -47,4 +47,7 @@ public extension Color {
     
     // 导航路线颜色
     static let navigationRouteColor = Color(red: 0.0, green: 0.3, blue: 0.7) // 深蓝色导航路线
+    
+    // 应用主色调
+    static let mapPrimaryColor = Color(red: 0.0, green: 0.3, blue: 0.7) // 用于地图相关颜色
 } 

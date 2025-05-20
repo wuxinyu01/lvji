@@ -25,62 +25,69 @@ class ColorOverlay: NSObject, MKOverlay {
         self.coordinate = region.center
         self.zoomLevel = region.span.latitudeDelta
         
-        // 创建一个足够大的覆盖区域
+        // 确保坐标在有效范围内
+        let lat = min(max(region.center.latitude, -85.0), 85.0) // 避免贴近极点的无效请求
+        let lon = min(max(region.center.longitude, -179.0), 179.0)
+        self.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        
+        // 创建一个足够大但不过大的覆盖区域
         let topLeft = MKMapPoint(CLLocationCoordinate2D(
-            latitude: region.center.latitude + region.span.latitudeDelta/2,
-            longitude: region.center.longitude - region.span.longitudeDelta/2))
+            latitude: min(max(region.center.latitude + region.span.latitudeDelta/2, -85.0), 85.0),
+            longitude: min(max(region.center.longitude - region.span.longitudeDelta/2, -179.0), 179.0)))
         
         let bottomRight = MKMapPoint(CLLocationCoordinate2D(
-            latitude: region.center.latitude - region.span.latitudeDelta/2,
-            longitude: region.center.longitude + region.span.longitudeDelta/2))
+            latitude: min(max(region.center.latitude - region.span.latitudeDelta/2, -85.0), 85.0),
+            longitude: min(max(region.center.longitude + region.span.longitudeDelta/2, -179.0), 179.0)))
         
         self.boundingMapRect = MKMapRect(
             x: topLeft.x,
             y: topLeft.y,
-            width: bottomRight.x - topLeft.x,
-            height: bottomRight.y - topLeft.y)
+            width: max(1, bottomRight.x - topLeft.x), // 确保宽度至少为1
+            height: max(1, bottomRight.y - topLeft.y)) // 确保高度至少为1
         
         super.init()
     }
 }
 
-// 自定义瓦片覆盖层 - 用于覆盖地图瓦片
+// 自定义瓦片覆盖层 - 用于覆盖地图瓦片，处理资源加载失败情况
 class CustomTileOverlay: MKTileOverlay {
-    // 使用空字符串作为URL模板，避免nil参数警告
-    init() {
-        super.init(urlTemplate: "")
+    private let errorHandlingEnabled: Bool
+    
+    // 初始化时启用错误处理
+    init(errorHandlingEnabled: Bool = true) {
+        self.errorHandlingEnabled = errorHandlingEnabled
+        super.init(urlTemplate: nil) // 使用nil而不是空字符串
+        
+        // 配置瓦片加载参数
+        self.canReplaceMapContent = false
+        self.tileSize = CGSize(width: 256, height: 256)
+        self.minimumZ = 0
+        self.maximumZ = 20
     }
     
     override func url(forTilePath path: MKTileOverlayPath) -> URL {
-        // 返回一个占位URL，实际不会使用
-        return URL(string: "https://example.com")!
+        // 返回一个有效的空白瓦片URL
+        return URL(string: "https://example.com/empty_tile")!
     }
     
-    // 加载瓦片数据，并应用自定义颜色过滤
+    // 加载瓦片数据，处理可能的错误
     override func loadTile(at path: MKTileOverlayPath, result: @escaping (Data?, Error?) -> Void) {
-        // 对于高缩放级别，我们生成自定义瓦片数据
-        if path.z > 15 {
-            // 创建一个简单的半透明瓦片，覆盖红色背景
-            let data = createSimpleTile()
-            result(data, nil)
-        } else {
-            // 对于低缩放级别，返回空数据
-            result(nil, nil)
-        }
+        // 创建一个空白半透明瓦片，防止红色背景和资源加载错误
+        let tileData = createEmptyTile()
+        result(tileData, nil)
     }
     
-    // 创建一个简单的半透明瓦片，用于覆盖红色背景
-    private func createSimpleTile() -> Data? {
+    // 创建空白半透明瓦片
+    private func createEmptyTile() -> Data? {
         #if os(iOS)
-        // 创建透明图像
         let size = CGSize(width: 256, height: 256)
         UIGraphicsBeginImageContextWithOptions(size, false, UIScreen.main.scale)
         defer { UIGraphicsEndImageContext() }
         
-        // 仅绘制一个浅色背景，用于中和红色背景
+        // 创建一个完全透明的瓦片
         if let context = UIGraphicsGetCurrentContext() {
-            // 设置浅灰白色背景，低不透明度
-            context.setFillColor(UIColor(red: 0.97, green: 0.97, blue: 0.95, alpha: 0.7).cgColor)
+            // 使用白色作为基色但几乎完全透明
+            context.setFillColor(UIColor.white.withAlphaComponent(0.01).cgColor)
             context.fill(CGRect(origin: .zero, size: size))
             
             if let image = UIGraphicsGetImageFromCurrentImageContext() {
@@ -88,7 +95,6 @@ class CustomTileOverlay: MKTileOverlay {
             }
         }
         #endif
-        
         return nil
     }
 }
@@ -96,6 +102,10 @@ class CustomTileOverlay: MKTileOverlay {
 // 单例委托处理地图渲染 - 在文件作用域内
 class MapViewCustomDelegate: NSObject, MKMapViewDelegate {
     static let shared = MapViewCustomDelegate()
+    
+    // 跟踪瓦片加载错误
+    private var resourceLoadingErrors = 0
+    private var lastErrorTime = Date()
     
     // 地图着色配置 - 符合要求的颜色方案
     private struct MapColors {
@@ -119,6 +129,50 @@ class MapViewCustomDelegate: NSObject, MKMapViewDelegate {
         static let background = UIColor(red: 0.97, green: 0.97, blue: 0.95, alpha: 1.0) // 浅灰白色背景
     }
     
+    // 处理地图加载错误消息
+    func mapViewDidFailLoadingMap(_ mapView: MKMapView, withError error: Error) {
+        // 记录错误
+        resourceLoadingErrors += 1
+        lastErrorTime = Date()
+        
+        print("地图加载错误: \(error.localizedDescription)")
+        
+        // 如果10秒内发生超过2次错误，立即应用安全修复
+        if resourceLoadingErrors > 2 && Date().timeIntervalSince(lastErrorTime) < 10.0 {
+            // 重置错误计数
+            resourceLoadingErrors = 0
+            
+            // 立即应用安全修复
+            DispatchQueue.main.async {
+                // 强制切换到标准地图类型
+                if #available(iOS 16.0, *) {
+                    let config = MKStandardMapConfiguration()
+                    config.elevationStyle = .flat
+                    config.pointOfInterestFilter = .includingAll
+                    config.showsTraffic = false
+                    mapView.preferredConfiguration = config
+                }
+                
+                // 设置更安全的缩放级别
+                let safeRegion = MKCoordinateRegion(
+                    center: mapView.region.center,
+                    span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
+                )
+                mapView.setRegion(safeRegion, animated: true)
+                
+                // 添加覆盖层以防止红色背景
+                let tileOverlay = CustomTileOverlay()
+                mapView.addOverlay(tileOverlay, level: .aboveRoads)
+            }
+        }
+    }
+    
+    // 地图加载完成时重置错误计数
+    func mapViewDidFinishLoadingMap(_ mapView: MKMapView) {
+        // 如果地图加载成功，重置错误计数
+        resourceLoadingErrors = 0
+    }
+    
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         if overlay is ColorOverlay {
             // 创建一个带有自定义颜色的覆盖渲染器，修复红色背景问题
@@ -132,8 +186,8 @@ class MapViewCustomDelegate: NSObject, MKMapViewDelegate {
             // 为瓦片覆盖层创建渲染器
             let renderer = MKTileOverlayRenderer(overlay: overlay)
             
-            // 使用较高的不透明度，以便瓦片颜色仍然可见
-            renderer.alpha = 0.9
+            // 瓦片覆盖层用于修复错误，确保它几乎不可见
+            renderer.alpha = 0.01
             
             return renderer
         } else if overlay is MKPolyline {
@@ -292,30 +346,36 @@ class MapViewCustomDelegate: NSObject, MKMapViewDelegate {
         // 检查缩放级别
         let zoomLevel = mapView.region.span.latitudeDelta
         
-        // 移除所有现有覆盖层
+        // 移除所有现有颜色覆盖层，保留其他覆盖层
         let overlaysToRemove = mapView.overlays.filter { $0 is ColorOverlay }
         mapView.removeOverlays(overlaysToRemove)
         
-        // 对于高缩放级别，应用特殊处理
-        if zoomLevel < 0.01 {
-            // 添加自定义颜色覆盖
+        // 只在需要的缩放级别添加颜色覆盖层
+        if zoomLevel < 0.5 {
+            // 添加自定义颜色覆盖以确保颜色正确
             let overlay = ColorOverlay(region: mapView.region)
-            mapView.addOverlay(overlay, level: .aboveLabels)
+            mapView.addOverlay(overlay, level: .aboveRoads)
             
-            // 确保地图使用平面样式，避免3D效果导致的红色问题
-            if #available(iOS 16.0, *) {
-                let config = MKStandardMapConfiguration()
-                config.elevationStyle = .flat
-                config.showsTraffic = false // 关闭交通显示，减少红色出现的机会
+            // 如果缩放级别较高，确保地图不会变成红色
+            if zoomLevel < 0.1 {
+                // 创建适当的缩放级别，避免红色背景
+                let safeRegion = MKCoordinateRegion(
+                    center: mapView.region.center,
+                    span: MKCoordinateSpan(latitudeDelta: 0.5, longitudeDelta: 0.5)
+                )
                 
-                // 自定义地图外观
-                config.pointOfInterestFilter = MKPointOfInterestFilter.includingAll
+                // 如果之前没有设置瓦片覆盖层，添加一个
+                let hasTileOverlay = mapView.overlays.contains { $0 is MKTileOverlay }
+                if !hasTileOverlay {
+                    let tileOverlay = CustomTileOverlay()
+                    mapView.addOverlay(tileOverlay, level: .aboveLabels)
+                }
                 
-                mapView.preferredConfiguration = config
+                // 避免循环，只有在用户操作时设置区域
+                if !animated {
+                    mapView.setRegion(safeRegion, animated: true)
+                }
             }
-            
-            // 应用全局样式设置
-            mapView.tintColor = UIColor(red: 0.0, green: 0.3, blue: 0.7, alpha: 1.0) // 蓝色导航线
         }
     }
 }
@@ -349,6 +409,7 @@ struct CountryMapView: View {
     @State private var isZooming = false // 用于跟踪缩放动画
     @State private var lastZoomUpdate = Date()
     @State private var mapStyleVersion: Int = 0 // 用于跟踪样式更新
+    @State private var resourceLoadingErrors = 0 // 用于跟踪资源加载错误
     
     // 添加搜索相关状态
     @State private var searchResults: [MKMapItem] = []
@@ -390,14 +451,30 @@ struct CountryMapView: View {
             }
         }
         .onAppear {
+            // 设置初始摄像机位置
+            setInitialCameraPosition()
+            
             // Request location authorization when the view appears
             requestLocationPermission()
+            
             // Load sample photo annotations
             loadSamplePhotoAnnotations()
-            // 设置全局地图样式
-            initializeMapStyles()
-            fixMapZoomColorIssue() // 确保颜色正确初始化
-            applyCorrectMapColors() // 全局应用正确的地图颜色
+        }
+    }
+    
+    // 设置初始摄像机位置
+    private func setInitialCameraPosition() {
+        // 使用更大的区域显示整个中国，确保地图完全加载
+        let defaultRegion = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 35.0, longitude: 105.0),
+            span: MKCoordinateSpan(latitudeDelta: 40.0, longitudeDelta: 40.0)
+        )
+        cameraPosition = .region(defaultRegion)
+        zoomLevel = defaultRegion.span.latitudeDelta
+        
+        // 确保初始化地图样式
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.initializeMapStyles()
         }
     }
     
@@ -538,31 +615,18 @@ struct CountryMapView: View {
                 }
             }
         }
-        .mapStyle(.standard) // 使用标准地图样式
-        .preferredColorScheme(.light) // 强制浅色模式，避免深色模式颜色问题
-        .tint(Color.navigationRouteColor) // 使用自定义导航线颜色
-        .mapControlVisibility(.visible) // 确保地图控件可见
-        .edgesIgnoringSafeArea(.all)
-        .overlay(
-            // 添加渐变覆盖，用于在高缩放级别平滑过渡颜色
-            ZStack {
-                // 背景色覆盖，用于修复红色背景问题
-                Rectangle()
-                    .fill(Color.mapBackground.opacity(getBackgroundOpacity()))
-                
-                // 网格覆盖，用于模拟道路网格
-                if zoomLevel < 0.15 {
-                    RoadGridOverlay()
-                }
-            }
-        )
-        .onChange(of: mapSelection) { _, newValue in
-            if let selection = newValue {
-                // Handle selection of a photo marker
-                print("Selected photo: \(selection.id)")
-            }
+        .mapStyle(mapStyle)
+        .mapControls {
+            // 添加地图控制元素以实现更好的交互
+            MapUserLocationButton()
+            MapCompass()
+            MapScaleView()
+            // 移除MapPitchToggle以避免3D模式引起额外的资源加载问题
         }
-        .onChange(of: cameraPosition) { oldPosition, newPosition in
+        // 使用地图控件替代交互模式设置
+        .edgesIgnoringSafeArea(.all)
+        // 监听位置变化更新缩放级别
+        .onChange(of: cameraPosition) { _, newPosition in
             // 监测地图位置变化，确保颜色保持正确
             // 防止节流，避免过多的更新调用
             let now = Date()
@@ -573,45 +637,34 @@ struct CountryMapView: View {
                 if !isZooming {
                     // 检查当前region并更新zoomLevel
                     if let region = cameraPosition.region {
-                        // 确保区域在允许的缩放范围内
-                        let adjustedRegion = MapStyleUtility.ensureRegionWithinLimits(region)
+                        // 更新zoomLevel
+                        zoomLevel = region.span.latitudeDelta
                         
-                        // 如果需要调整区域，更新相机位置
-                        if adjustedRegion.span.latitudeDelta != region.span.latitudeDelta {
-                            // 先更新zoomLevel状态变量
-                            self.zoomLevel = adjustedRegion.span.latitudeDelta
-                            
-                            // 更新相机位置
-                            DispatchQueue.main.async {
-                                cameraPosition = .region(adjustedRegion)
-                            }
-                        } else {
-                            // 正常更新zoomLevel
-                            zoomLevel = region.span.latitudeDelta
-                        }
-                        
-                        // 如果缩放级别过小（过于放大），可能导致红色背景问题
-                        if zoomLevel < 0.01 {
-                            // 在主线程延迟一小段时间后应用样式
+                        // 只有在过度缩放时才应用限制
+                        if region.span.latitudeDelta < 0.3 {
+                            // 在主线程延迟应用样式修复
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                initializeMapStyles() // 应用自定义样式修复颜色
-                                fixMapZoomColorIssue() // 专门针对放大问题的修复
+                                self.fixMapZoomColorIssue()
                             }
                         }
                     }
                 }
             }
         }
+        // 确保应用正确的地图样式，防止深色模式问题
         .onAppear {
-            initializeMapStyles()
-            // 确保使用浅色模式
-            #if os(iOS)
-            MapStyleUtility.enforceLightMode()
-            #endif
+            // 先设置更大的区域显示整个中国
+            setInitialCameraPosition()
+            
+            // 确保初始化地图样式
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.initializeMapStyles()
+            }
         }
+        // 处理错误情况
         .onDisappear {
-            // 确保视图消失时不会保持设置的缩放级别
-            zoomLevel = 0.3 // 重置为默认值
+            // 清理资源
+            resourceLoadingErrors = 0
         }
     }
     
@@ -1065,9 +1118,9 @@ struct CountryMapView: View {
     // 放大地图
     private func zoomIn() {
         if let region = getCurrentRegion() {
-            // 设置最小缩放限制，避免显示红色背景
-            let newLatDelta = max(region.span.latitudeDelta * 0.6, 0.15) // 修改最小限制值为0.15
-            let newLongDelta = max(region.span.longitudeDelta * 0.6, 0.15) // 修改最小限制值为0.15
+            // 设置更灵活的最小缩放限制，允许更接近查看
+            let newLatDelta = max(region.span.latitudeDelta * 0.5, 0.1) // 调整最小限制值为0.1，允许更灵活的缩放
+            let newLongDelta = max(region.span.longitudeDelta * 0.5, 0.1)
             
             // 设置缩放标志
             isZooming = true
@@ -1080,22 +1133,15 @@ struct CountryMapView: View {
                     center: region.center,
                     span: MKCoordinateSpan(latitudeDelta: newLatDelta, longitudeDelta: newLongDelta)
                 ))
-                
-                // 移除这里的赋值，避免在闭包内修改let常量
             }
-            
-            // 缩放后立即应用自定义样式以确保颜色正确
-            initializeMapStyles()
-            
-            // 专门针对放大缩放的颜色修复
-            fixMapZoomColorIssue()
             
             // 延迟重置缩放标志
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 isZooming = false
-                // 再次确认样式正确
-                initializeMapStyles()
-                fixMapZoomColorIssue()
+                // 确保只在需要时应用样式修复
+                if newLatDelta < 0.01 {
+                    initializeMapStyles()
+                }
             }
         }
     }
@@ -1106,9 +1152,9 @@ struct CountryMapView: View {
             // 使用MapStyleUtility获取最大允许的跨度
             let maxSpan = MapStyleUtility.getMaxSpan()
             
-            // 计算新的跨度，但不超过最大允许值
-            let newLatDelta = min(region.span.latitudeDelta * 2.0, maxSpan.latitudeDelta)
-            let newLongDelta = min(region.span.longitudeDelta * 2.0, maxSpan.longitudeDelta)
+            // 计算新的跨度，使用更大的缩放因子，但不超过最大允许值
+            let newLatDelta = min(region.span.latitudeDelta * 2.5, maxSpan.latitudeDelta)
+            let newLongDelta = min(region.span.longitudeDelta * 2.5, maxSpan.longitudeDelta)
             
             // 设置缩放标志
             isZooming = true
@@ -1121,8 +1167,6 @@ struct CountryMapView: View {
                     center: region.center,
                     span: MKCoordinateSpan(latitudeDelta: newLatDelta, longitudeDelta: newLongDelta)
                 ))
-                
-                // 移除这里的赋值，避免在闭包内修改let常量
             }
             
             // 延迟重置缩放标志
@@ -1223,15 +1267,21 @@ struct CountryMapView: View {
         // 确保使用标准地图样式
         mapStyle = .standard
         
-        // 如果缩放级别过高，可能会导致红色背景问题，我们重置为更安全的缩放级别
-        if let region = getCurrentRegion(), region.span.latitudeDelta < 0.01 {
-            let safeRegion = MapStyleUtility.createSafeRegion(center: region.center)
-            
-            // 先更新zoomLevel状态变量
-            self.zoomLevel = safeRegion.span.latitudeDelta
-            
-            // 然后更新相机位置
-            cameraPosition = .region(safeRegion)
+        // 获取当前区域，确保地图显示正确
+        if let region = getCurrentRegion() {
+            // 如果缩放级别过小，调整到更合适的缩放级别
+            if region.span.latitudeDelta < 0.2 {
+                let safeRegion = MKCoordinateRegion(
+                    center: region.center,
+                    span: MKCoordinateSpan(latitudeDelta: 1.0, longitudeDelta: 1.0)
+                )
+                
+                // 先更新zoomLevel状态变量
+                self.zoomLevel = safeRegion.span.latitudeDelta
+                
+                // 然后更新相机位置
+                cameraPosition = .region(safeRegion)
+            }
         }
         
         // 设置地图视图的全局样式
@@ -1280,8 +1330,8 @@ struct CountryMapView: View {
         // 应用基本样式
         MapStyleUtility.applyCustomStyle(to: mapView)
         
-        // 如果缩放级别较高，应用特殊处理
-        if MapStyleUtility.isHighZoomLevel(mapView.region) {
+        // 仅在极端缩放级别时应用特殊处理
+        if MapStyleUtility.isExtremeZoomLevel(mapView.region) {
             // 移除现有覆盖层
             let overlaysToRemove = mapView.overlays
             mapView.removeOverlays(overlaysToRemove)
@@ -1290,12 +1340,10 @@ struct CountryMapView: View {
             let overlay = ColorOverlay(region: mapView.region)
             mapView.addOverlay(overlay, level: .aboveRoads)
             
-            // 如果缩放级别非常高，添加瓦片覆盖
-            if MapStyleUtility.isExtremeZoomLevel(mapView.region) {
-                // 创建自定义瓦片覆盖层
-                let tileOverlay = CustomTileOverlay()
-                mapView.addOverlay(tileOverlay, level: .aboveLabels)
-            }
+            // 添加瓦片覆盖
+            // 创建自定义瓦片覆盖层
+            let tileOverlay = CustomTileOverlay()
+            mapView.addOverlay(tileOverlay, level: .aboveLabels)
         }
     }
     
@@ -1311,43 +1359,14 @@ struct CountryMapView: View {
     }
     #endif
     
-    // 专门用于修复地图放大时的颜色问题
+    // 添加专门修复地图缩放红色背景问题的方法
     private func fixMapZoomColorIssue() {
         #if os(iOS)
-        // 强制重置地图的底层颜色设置
-        DispatchQueue.main.async {
-            // 确保使用标准样式
-            mapStyle = .standard
-            
-            // 检查是否在放大状态
-            if let region = getCurrentRegion() {
-                let zoomLevel = region.span.latitudeDelta
-                
-                // 根据不同的缩放级别采取不同的修复策略
-                if zoomLevel < 0.15 {
-                    // 设置最小缩放级别为0.15，与图示缩放级别一致
-                    let safeRegion = MKCoordinateRegion(
-                        center: region.center,
-                        span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)
-                    )
-                    
-                    // 先更新zoomLevel状态变量
-                    self.zoomLevel = 0.15
-                    
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        cameraPosition = .region(safeRegion)
-                        // 移除这里的赋值，避免在闭包内修改let常量
-                    }
-                    
-                    // 应用中等强度修复
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        self.applyModerateZoomFix()
-                    }
-                } else if zoomLevel < 0.3 {
-                    // 中等缩放级别 - 只需要轻微修复
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        self.applyLightZoomFix()
-                    }
+        // 查找并应用特殊样式到当前地图视图
+        if let windowScenes = UIApplication.shared.connectedScenes as? Set<UIWindowScene> {
+            for windowScene in windowScenes {
+                for window in windowScene.windows {
+                    findAndFixMapRedBackgroundIssue(in: window)
                 }
             }
         }
@@ -1355,99 +1374,46 @@ struct CountryMapView: View {
     }
     
     #if os(iOS)
-    // 应用强力修复 - 用于极高缩放级别
-    private func applyStrongZoomFix() {
-        findAndApplyMapStyling()
-        
-        // 限制最小缩放级别为0.15，与图示缩放级别一致
-        if let region = getCurrentRegion(), region.span.latitudeDelta < 0.15 {
-            // 应用安全区域，确保不会过度放大
-            let safeRegion = MKCoordinateRegion(
-                center: region.center,
-                span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)
-            )
-            
-            // 先更新zoomLevel状态变量
-            self.zoomLevel = 0.15
-            
-            withAnimation(.easeInOut(duration: 0.5)) {
-                cameraPosition = .region(safeRegion)
-                // 移除这里的赋值，避免在闭包内修改let常量
-            }
-        }
-        
-        // 立即应用覆盖层修复
-        DispatchQueue.main.async {
-            self.overlayMapWithCorrectColors()
-        }
-    }
-    
-    // 应用中等强度修复 - 用于高缩放级别
-    private func applyModerateZoomFix() {
-        findAndApplyMapStyling()
-    }
-    
-    // 应用轻微修复 - 用于中等缩放级别
-    private func applyLightZoomFix() {
-        // 只确保地图样式正确设置
-        if let region = getCurrentRegion() {
-            let allWindows = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .flatMap { $0.windows }
-            
-            for window in allWindows {
-                for subview in window.subviews {
-                    if let mapView = findMapView(in: subview) {
-                        // 应用基本样式
-                        MapStyleUtility.applyCustomStyle(to: mapView)
-                    }
-                }
-            }
-        }
-    }
-    
-    // 在视图层次结构中查找MKMapView
-    private func findMapView(in view: UIView) -> MKMapView? {
+    // 查找并修复地图红色背景问题
+    private func findAndFixMapRedBackgroundIssue(in view: UIView) {
+        // 如果当前视图是地图视图，应用修复
         if let mapView = view as? MKMapView {
-            return mapView
+            // 完全移除所有现有覆盖层
+            mapView.removeOverlays(mapView.overlays)
+            
+            // 设置合适的缩放级别避免红色背景
+            if mapView.region.span.latitudeDelta < 0.2 {
+                let safeRegion = MKCoordinateRegion(
+                    center: mapView.region.center,
+                    span: MKCoordinateSpan(latitudeDelta: 1.0, longitudeDelta: 1.0)
+                )
+                mapView.setRegion(safeRegion, animated: true)
+            }
+            
+            // 添加空白瓦片覆盖层
+            let tileOverlay = CustomTileOverlay()
+            mapView.addOverlay(tileOverlay, level: .aboveRoads)
+            
+            // 添加颜色覆盖层，提供轻微的背景色
+            let colorOverlay = ColorOverlay(region: mapView.region)
+            mapView.addOverlay(colorOverlay, level: .aboveLabels)
+            
+            // 确保代理设置正确
+            mapView.delegate = MapViewCustomDelegate.shared
+            
+            // 强制切换到标准地图类型
+            if #available(iOS 16.0, *) {
+                let config = MKStandardMapConfiguration()
+                config.elevationStyle = .flat
+                config.pointOfInterestFilter = .includingAll
+                config.showsTraffic = false
+                mapView.preferredConfiguration = config
+            }
         }
         
+        // 递归遍历所有子视图
         for subview in view.subviews {
-            if let mapView = findMapView(in: subview) {
-                return mapView
-            }
-        }
-        
-        return nil
-    }
-    
-    // 使用正确的颜色方案覆盖地图
-    private func overlayMapWithCorrectColors() {
-        // 查找所有地图视图
-        let allWindows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-        
-        for window in allWindows {
-            for subview in window.subviews {
-                if let mapView = findMapView(in: subview) {
-                    // 移除所有现有覆盖层
-                    mapView.removeOverlays(mapView.overlays)
-                    
-                    // 添加一个覆盖当前区域的ColorOverlay
-                    let overlay = ColorOverlay(region: mapView.region)
-                    mapView.addOverlay(overlay, level: .aboveRoads)
-                    
-                    // 添加自定义瓦片覆盖层以处理红色背景
-                    let tileOverlay = CustomTileOverlay()
-                    mapView.addOverlay(tileOverlay, level: .aboveLabels)
-                    
-                    // 确保使用正确的代理
-                    if mapView.delegate == nil || !(mapView.delegate is MapViewCustomDelegate) {
-                        mapView.delegate = MapViewCustomDelegate.shared
-                    }
-                }
-            }
+            findAndFixMapRedBackgroundIssue(in: subview)
         }
     }
     #endif
@@ -1969,7 +1935,8 @@ struct LocationPhotoDetailView: View {
                         .stroke(Color.white, lineWidth: 2)
                         .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 )
-                .disabled(false) // Allow interaction with the map
+                // 避免使用 .disabled() 可能会有兼容性问题
+                // 允许用户与地图交互
                 
                 // Location info section
                 HStack {

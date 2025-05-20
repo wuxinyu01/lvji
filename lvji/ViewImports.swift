@@ -19,6 +19,14 @@ import SwiftUI
 // 导入必要的工具类型
 @_exported import MapKit
 @_exported import CoreLocation
+@_exported import Combine
+@_exported import QuartzCore
+
+#if os(iOS)
+@_exported import UIKit
+#elseif os(macOS)
+@_exported import AppKit
+#endif
 
 // 这只是一个标记，表示此文件的目的是作为视图导入的集中点
 struct ViewImportMarker {} 
