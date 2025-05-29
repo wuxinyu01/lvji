@@ -63,7 +63,10 @@ struct MapStyleUtility {
     /// - Parameter mapView: 需要修复的地图视图
     static func fixResourceLoadingIssue(for mapView: MKMapView) {
         #if os(iOS)
-        // 1. 重置地图类型
+        // 1. 清理地图缓存
+        clearMapCache()
+        
+        // 2. 重置地图类型
         if #available(iOS 16.0, *) {
             let config = MKStandardMapConfiguration()
             config.elevationStyle = .flat
@@ -72,20 +75,64 @@ struct MapStyleUtility {
             mapView.preferredConfiguration = config
         }
         
-        // 2. 清除所有覆盖层并设置代理
+        // 3. 清除所有覆盖层并设置代理
         mapView.removeOverlays(mapView.overlays)
         mapView.delegate = MapViewCustomDelegate.shared
         
-        // 3. 调整地图区域到更安全的缩放级别，确保能够正确加载瓦片资源
+        // 4. 调整地图区域到更安全的缩放级别，确保能够正确加载瓦片资源
         let safeRegion = MKCoordinateRegion(
             center: mapView.region.center,
             span: MKCoordinateSpan(latitudeDelta: 1.0, longitudeDelta: 1.0)
         )
         mapView.setRegion(safeRegion, animated: true)
         
-        // 4. 添加瓦片覆盖层来处理瓦片加载错误
+        // 5. 添加瓦片覆盖层来处理瓦片加载错误 - 增加透明度以避免完全遮挡
         let tileOverlay = CustomTileOverlay()
         mapView.addOverlay(tileOverlay, level: .aboveRoads)
+        
+        // 6. 增加更多修复尝试
+        // 强制设置为浅色模式避免渲染问题
+        enforceLightMode()
+        
+        // 延迟执行第二次修复尝试
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            // 7. 如果仍然看到红色背景，添加一个纯白色覆盖层
+            let colorOverlay = ColorOverlay(region: mapView.region)
+            mapView.addOverlay(colorOverlay, level: .aboveLabels)
+            
+            // 8. 尝试重新加载地图
+            mapView.setRegion(mapView.region, animated: false)
+        }
+        #endif
+    }
+    
+    /// 清理地图缓存
+    static func clearMapCache() {
+        #if os(iOS)
+        // 获取缓存目录
+        if let cacheDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            // 创建地图瓦片缓存URL
+            let mapCacheURL = cacheDirectory.appendingPathComponent("MapTiles")
+            
+            // 尝试删除地图缓存
+            try? FileManager.default.removeItem(at: mapCacheURL)
+            
+            // 清理其他可能的地图缓存位置
+            let alternativeCachePaths = [
+                "com.apple.MapKit",
+                "MapKit",
+                "Maps",
+                "com.apple.Maps"
+            ]
+            
+            for cacheName in alternativeCachePaths {
+                let cachePath = cacheDirectory.appendingPathComponent(cacheName)
+                try? FileManager.default.removeItem(at: cachePath)
+            }
+            
+            // 打印日志
+            print("地图缓存已清理")
+        }
         #endif
     }
     

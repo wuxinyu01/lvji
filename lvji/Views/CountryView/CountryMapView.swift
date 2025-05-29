@@ -626,27 +626,17 @@ struct CountryMapView: View {
         // 使用地图控件替代交互模式设置
         .edgesIgnoringSafeArea(.all)
         // 监听位置变化更新缩放级别
-        .onChange(of: cameraPosition) { _, newPosition in
-            // 监测地图位置变化，确保颜色保持正确
-            // 防止节流，避免过多的更新调用
-            let now = Date()
-            if now.timeIntervalSince(lastZoomUpdate) > 0.5 {
-                lastZoomUpdate = now
-                
-                // 检查是否在缩放过程中（避免动画期间重复设置）
-                if !isZooming {
-                    // 检查当前region并更新zoomLevel
-                    if let region = cameraPosition.region {
-                        // 更新zoomLevel
-                        zoomLevel = region.span.latitudeDelta
-                        
-                        // 只有在过度缩放时才应用限制
-                        if region.span.latitudeDelta < 0.3 {
-                            // 在主线程延迟应用样式修复
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                self.fixMapZoomColorIssue()
-                            }
-                        }
+        .onChange(of: cameraPosition) { _, _ in
+            if let region = cameraPosition.region {
+                let delta = region.span.latitudeDelta
+                // 只在城区级别的两个缩放区间兜底
+                if delta > 0.01 && delta < 0.08 {
+                    let safeRegion = MKCoordinateRegion(
+                        center: region.center,
+                        span: MKCoordinateSpan(latitudeDelta: 0.12, longitudeDelta: 0.12)
+                    )
+                    DispatchQueue.main.async {
+                        cameraPosition = .region(safeRegion)
                     }
                 }
             }
@@ -1723,24 +1713,70 @@ struct InlineLocationPhotoAlbumView: View {
     // Sample location data
     @State private var photoLocations: [LocationPhotoCollection] = sampleLocationPhotoCollections
     @State private var selectedLocation: LocationPhotoCollection?
+    @State private var isEditMode = false
+    @State private var showDeleteAllAlert = false
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    ForEach(photoLocations) { location in
-                        LocationAlbumSection(location: location) {
-                            selectedLocation = location
+            ZStack {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 24) {
+                        ForEach(photoLocations) { location in
+                            LocationAlbumSection(location: location, onTap: {
+                                selectedLocation = location
+                            }, onDelete: {
+                                // 删除单个位置
+                                deleteLocation(location)
+                            })
                         }
                     }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 12)
+                
+                // 如果没有照片位置，显示空状态
+                if photoLocations.isEmpty {
+                    VStack(spacing: 20) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                        
+                        Text("没有照片位置")
+                            .font(.title2)
+                            .bold()
+                        
+                        Text("您还没有添加任何照片位置\n请使用相机功能拍摄照片")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                    }
+                }
             }
             .navigationTitle("照片地点")
             .compatibleNavigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: ToolbarItemPlacement.compatibleTrailing) {
+                    Menu {
+                        Button(action: {
+                            isEditMode.toggle()
+                        }) {
+                            Label(isEditMode ? "完成编辑" : "编辑", systemImage: isEditMode ? "checkmark.circle" : "pencil")
+                        }
+                        
+                        if !photoLocations.isEmpty {
+                            Button(role: .destructive, action: {
+                                showDeleteAllAlert = true
+                            }) {
+                                Label("清空所有位置", systemImage: "trash")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                ToolbarItem(placement: ToolbarItemPlacement.compatibleLeading) {
                     Button("关闭") {
                         dismiss()
                     }
@@ -1748,7 +1784,33 @@ struct InlineLocationPhotoAlbumView: View {
             }
             .sheet(item: $selectedLocation) { location in
                 LocationPhotoDetailView(location: location)
+                    .onDisappear {
+                        // 更新位置中的照片数量
+                        if let index = photoLocations.firstIndex(where: { $0.id == location.id }) {
+                            // 如果照片数量为0，删除整个位置
+                            if location.photos.isEmpty {
+                                photoLocations.remove(at: index)
+                            }
+                        }
+                    }
             }
+            .alert("清空所有位置", isPresented: $showDeleteAllAlert) {
+                Button("取消", role: .cancel) {}
+                
+                Button("清空", role: .destructive) {
+                    // 删除所有位置
+                    photoLocations.removeAll()
+                }
+            } message: {
+                Text("确定要删除所有位置及其照片吗？此操作不可撤销。")
+            }
+        }
+    }
+    
+    // 删除单个位置
+    private func deleteLocation(_ location: LocationPhotoCollection) {
+        if let index = photoLocations.firstIndex(where: { $0.id == location.id }) {
+            photoLocations.remove(at: index)
         }
     }
 }
@@ -1756,6 +1818,12 @@ struct InlineLocationPhotoAlbumView: View {
 struct LocationAlbumSection: View {
     let location: LocationPhotoCollection
     let onTap: () -> Void
+    var onDelete: (() -> Void)? = nil
+    
+    @State private var showDeleteAlert = false
+    @State private var showShareSheet = false
+    @State private var imagesToShare: [UIImage] = []
+    @State private var isLoading = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1774,6 +1842,29 @@ struct LocationAlbumSection: View {
                 Text("\(location.photos.count) 张照片")
                     .font(.subheadline)
                     .foregroundColor(.gray)
+                
+                // 添加更多操作菜单
+                Menu {
+                    if location.photos.count > 0 {
+                        Button(action: {
+                            loadImagesForSharing()
+                        }) {
+                            Label("分享全部", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    
+                    if onDelete != nil {
+                        Button(role: .destructive, action: {
+                            showDeleteAlert = true
+                        }) {
+                            Label("删除位置", systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 18))
+                        .foregroundColor(.gray)
+                }
             }
             
             // Photo preview grid
@@ -1821,6 +1912,81 @@ struct LocationAlbumSection: View {
         .background(Color.white)
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
+        .contextMenu {
+            if location.photos.count > 0 {
+                Button(action: {
+                    loadImagesForSharing()
+                }) {
+                    Label("分享全部", systemImage: "square.and.arrow.up")
+                }
+            }
+            
+            if onDelete != nil {
+                Button(role: .destructive, action: {
+                    showDeleteAlert = true
+                }) {
+                    Label("删除位置", systemImage: "trash")
+                }
+            }
+        }
+        .alert("删除位置", isPresented: $showDeleteAlert) {
+            Button("取消", role: .cancel) {}
+            
+            Button("删除", role: .destructive) {
+                onDelete?()
+            }
+        } message: {
+            Text("确定要删除\(location.name)及其所有照片吗？此操作不可撤销。")
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if !imagesToShare.isEmpty {
+                ShareSheet(items: imagesToShare)
+            }
+        }
+        .overlay(
+            ZStack {
+                if isLoading {
+                    Color.black.opacity(0.3)
+                        .cornerRadius(16)
+                    
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                }
+            }
+        )
+    }
+    
+    // 批量加载图片用于分享
+    private func loadImagesForSharing() {
+        guard !location.photos.isEmpty else { return }
+        
+        isLoading = true
+        imagesToShare = []
+        
+        let group = DispatchGroup()
+        
+        for photo in location.photos {
+            guard let url = URL(string: photo.url) else { continue }
+            
+            group.enter()
+            URLSession.shared.dataTask(with: url) { data, response, error in
+                defer { group.leave() }
+                
+                if let data = data, error == nil, let image = UIImage(data: data) {
+                    DispatchQueue.main.async {
+                        imagesToShare.append(image)
+                    }
+                }
+            }.resume()
+        }
+        
+        group.notify(queue: .main) {
+            isLoading = false
+            if !imagesToShare.isEmpty {
+                showShareSheet = true
+            }
+        }
     }
 }
 
@@ -1867,6 +2033,23 @@ struct LocationPhotoDetailView: View {
     @State private var mapPosition: MapCameraPosition
     @State private var isMapAnimated = false
     
+    // 滑动查看相关状态
+    @State private var selectedPhoto: PhotoItem? = nil
+    @State private var isFullScreenMode = false
+    @State private var showShareSheet = false
+    @State private var imageToShare: UIImage? = nil
+    
+    // 编辑模式状态
+    @State private var isEditMode: Bool = false
+    @State private var selectedPhotos: Set<UUID> = []
+    @State private var showDeleteAlert: Bool = false
+    @State private var showBatchShareSheet: Bool = false
+    @State private var imagesToShare: [UIImage] = []
+    @State private var isLoading: Bool = false
+    
+    // 存储照片数据的可变副本
+    @State private var photoCollection: LocationPhotoCollection
+    
     // Grid layout
     let columns = [
         GridItem(.flexible()),
@@ -1877,6 +2060,7 @@ struct LocationPhotoDetailView: View {
     // Initializer to set up the initial camera position
     init(location: LocationPhotoCollection) {
         self.location = location
+        self._photoCollection = State(initialValue: location)
         // Set the initial map position using safe region
         self._mapPosition = State(initialValue: .region(MapStyleUtility.createSafeRegion(center: location.coordinate)))
     }
@@ -1935,8 +2119,6 @@ struct LocationPhotoDetailView: View {
                         .stroke(Color.white, lineWidth: 2)
                         .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 )
-                // 避免使用 .disabled() 可能会有兼容性问题
-                // 允许用户与地图交互
                 
                 // Location info section
                 HStack {
@@ -1954,7 +2136,7 @@ struct LocationPhotoDetailView: View {
                             .font(.system(size: 14))
                             .foregroundColor(.gray)
                         
-                        Text("\(location.photos.count) 张照片")
+                        Text("\(photoCollection.photos.count) 张照片")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                     }
@@ -1965,41 +2147,188 @@ struct LocationPhotoDetailView: View {
                 .padding(.horizontal)
                 .padding(.top, 12)
                 
-                // Photo grid with improved visual hierarchy
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 6) {
-                        ForEach(location.photos) { photo in
-                            SafeAsyncImage(url: URL(string: photo.url)) { image in
-                                image
-                                    .resizable()
-                                    .scaledToFill()
-                            } placeholder: {
-                                ZStack {
-                                    Color.gray.opacity(0.3)
-                                    Image(systemName: "photo")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.gray)
+                // 编辑模式下的操作按钮
+                if isEditMode {
+                    HStack {
+                        Button(action: {
+                            isEditMode = false
+                            selectedPhotos.removeAll()
+                        }) {
+                            Text("取消")
+                                .foregroundColor(.blue)
+                        }
+                        
+                        Spacer()
+                        
+                        Text("\(selectedPhotos.count)张已选")
+                            .foregroundColor(.gray)
+                        
+                        Spacer()
+                        
+                        if !selectedPhotos.isEmpty {
+                            Menu {
+                                Button(action: {
+                                    showDeleteAlert = true
+                                }) {
+                                    Label("删除", systemImage: "trash")
                                 }
+                                
+                                Button(action: {
+                                    loadImagesForBatchSharing()
+                                }) {
+                                    Label("分享", systemImage: "square.and.arrow.up")
+                                }
+                                
+                                Button(action: {
+                                    // 全选/取消全选
+                                    if selectedPhotos.count == photoCollection.photos.count {
+                                        selectedPhotos.removeAll()
+                                    } else {
+                                        selectedPhotos = Set(photoCollection.photos.map { $0.id })
+                                    }
+                                }) {
+                                    Label(
+                                        selectedPhotos.count == photoCollection.photos.count ? "取消全选" : "全选",
+                                        systemImage: selectedPhotos.count == photoCollection.photos.count ? "checkmark.circle.fill" : "circle"
+                                    )
+                                }
+                            } label: {
+                                Text("操作")
+                                    .foregroundColor(.blue)
                             }
-                            .aspectRatio(1, contentMode: .fill)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color.white, lineWidth: 1)
-                            )
-                            .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
-                            .transition(.opacity)
                         }
                     }
-                    .padding(6)
-                    .animation(.easeInOut, value: location.photos.count)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.white)
+                    .shadow(color: Color.black.opacity(0.05), radius: 2, y: 1)
+                }
+                
+                // Photo grid with improved visual hierarchy
+                ZStack {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(photoCollection.photos) { photo in
+                                ZStack {
+                                    SafeAsyncImage(url: URL(string: photo.url)) { image in
+                                        image
+                                            .resizable()
+                                            .scaledToFill()
+                                    } placeholder: {
+                                        ZStack {
+                                            Color.gray.opacity(0.3)
+                                            Image(systemName: "photo")
+                                                .font(.system(size: 30))
+                                                .foregroundColor(.gray)
+                                        }
+                                    }
+                                    .aspectRatio(1, contentMode: .fill)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .stroke(Color.white, lineWidth: 1)
+                                    )
+                                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                                    .transition(.opacity)
+                                    .contentShape(Rectangle()) // 确保整个区域可点击
+                                    
+                                    // 编辑模式下的选择图标
+                                    if isEditMode {
+                                        VStack {
+                                            HStack {
+                                                Spacer()
+                                                
+                                                ZStack {
+                                                    Circle()
+                                                        .fill(selectedPhotos.contains(photo.id) ? Color.blue : Color.white)
+                                                        .frame(width: 22, height: 22)
+                                                        .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 1)
+                                                    
+                                                    if selectedPhotos.contains(photo.id) {
+                                                        Image(systemName: "checkmark")
+                                                            .font(.system(size: 12, weight: .bold))
+                                                            .foregroundColor(.white)
+                                                    } else {
+                                                        Circle()
+                                                            .stroke(Color.gray, lineWidth: 1.5)
+                                                            .frame(width: 18, height: 18)
+                                                    }
+                                                }
+                                                .padding(6)
+                                            }
+                                            
+                                            Spacer()
+                                        }
+                                    }
+                                }
+                                .onTapGesture {
+                                    if isEditMode {
+                                        // 在编辑模式下，点击切换选择状态
+                                        if selectedPhotos.contains(photo.id) {
+                                            selectedPhotos.remove(photo.id)
+                                        } else {
+                                            selectedPhotos.insert(photo.id)
+                                        }
+                                    } else {
+                                        // 正常模式下，打开全屏预览
+                                        selectedPhoto = photo
+                                        isFullScreenMode = true
+                                    }
+                                }
+                                .contextMenu {
+                                    if !isEditMode {
+                                        Button(action: {
+                                            loadImageForSharing(from: photo.url)
+                                        }) {
+                                            Label("分享", systemImage: "square.and.arrow.up")
+                                        }
+                                        
+                                        Button(action: {
+                                            selectedPhoto = photo
+                                            isFullScreenMode = true
+                                        }) {
+                                            Label("查看", systemImage: "eye")
+                                        }
+                                        
+                                        Button(role: .destructive, action: {
+                                            selectedPhoto = photo
+                                            showDeleteAlert = true
+                                        }) {
+                                            Label("删除", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(6)
+                        .animation(.easeInOut, value: photoCollection.photos.count)
+                    }
+                    
+                    // 加载指示器
+                    if isLoading {
+                        Color.black.opacity(0.3)
+                            .ignoresSafeArea()
+                        
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    }
                 }
             }
             .navigationTitle(location.name)
             .compatibleNavigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: ToolbarItemPlacement.compatibleTrailing) {
+                    Button(isEditMode ? "完成" : "编辑") {
+                        isEditMode.toggle()
+                        if !isEditMode {
+                            selectedPhotos.removeAll()
+                        }
+                    }
+                }
+                
+                ToolbarItem(placement: ToolbarItemPlacement.compatibleLeading) {
                     Button("关闭") {
                         dismiss()
                     }
@@ -2015,8 +2344,291 @@ struct LocationPhotoDetailView: View {
                     mapPosition = .region(MapStyleUtility.createSafeRegion(center: location.coordinate))
                 }
             }
+            .fullScreenCover(isPresented: $isFullScreenMode) {
+                FullScreenPhotoViewer(
+                    photos: photoCollection.photos,
+                    initialPhoto: selectedPhoto,
+                    onDismiss: {
+                        isFullScreenMode = false
+                    },
+                    onDelete: { photoToDelete in
+                        deletePhoto(photoToDelete)
+                    }
+                )
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let image = imageToShare {
+                    ShareSheet(items: [image])
+                }
+            }
+            .sheet(isPresented: $showBatchShareSheet) {
+                ShareSheet(items: imagesToShare)
+            }
+            .alert("删除照片", isPresented: $showDeleteAlert) {
+                Button("取消", role: .cancel) {}
+                
+                Button("删除", role: .destructive) {
+                    if isEditMode && !selectedPhotos.isEmpty {
+                        // 批量删除选中的照片
+                        let photosToDelete = photoCollection.photos.filter { selectedPhotos.contains($0.id) }
+                        deletePhotos(photosToDelete)
+                        selectedPhotos.removeAll()
+                    } else if let photo = selectedPhoto {
+                        // 删除单张照片
+                        deletePhoto(photo)
+                    }
+                }
+            } message: {
+                if isEditMode && !selectedPhotos.isEmpty {
+                    Text("确定要删除这\(selectedPhotos.count)张照片吗？此操作不可撤销。")
+                } else {
+                    Text("确定要删除这张照片吗？此操作不可撤销。")
+                }
+            }
         }
     }
+    
+    // 加载单张图片用于分享
+    private func loadImageForSharing(from urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        
+        isLoading = true
+        
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            defer {
+                DispatchQueue.main.async {
+                    isLoading = false
+                }
+            }
+            
+            guard let data = data, error == nil,
+                  let uiImage = UIImage(data: data) else {
+                return
+            }
+            
+            DispatchQueue.main.async {
+                self.imageToShare = uiImage
+                self.showShareSheet = true
+            }
+        }.resume()
+    }
+    
+    // 批量加载图片用于分享
+    private func loadImagesForBatchSharing() {
+        let selectedPhotosList = photoCollection.photos.filter { selectedPhotos.contains($0.id) }
+        guard !selectedPhotosList.isEmpty else { return }
+        
+        isLoading = true
+        imagesToShare = []
+        
+        let group = DispatchGroup()
+        
+        for photo in selectedPhotosList {
+            guard let url = URL(string: photo.url) else { continue }
+            
+            group.enter()
+            URLSession.shared.dataTask(with: url) { data, response, error in
+                defer { group.leave() }
+                
+                if let data = data, error == nil, let image = UIImage(data: data) {
+                    DispatchQueue.main.async {
+                        imagesToShare.append(image)
+                    }
+                }
+            }.resume()
+        }
+        
+        group.notify(queue: .main) {
+            isLoading = false
+            if !imagesToShare.isEmpty {
+                showBatchShareSheet = true
+            }
+        }
+    }
+    
+    // 删除单张照片
+    private func deletePhoto(_ photo: PhotoItem) {
+        photoCollection.removePhoto(photo)
+    }
+    
+    // 批量删除照片
+    private func deletePhotos(_ photos: [PhotoItem]) {
+        photoCollection.removePhotos(photos)
+    }
+}
+
+// 全屏照片浏览器
+struct FullScreenPhotoViewer: View {
+    let photos: [PhotoItem]
+    let initialPhoto: PhotoItem?
+    let onDismiss: () -> Void
+    let onDelete: (PhotoItem) -> Void
+    
+    @State private var currentIndex: Int = 0
+    @State private var scale: CGFloat = 1.0
+    @State private var showControls = true
+    @State private var showShareSheet = false
+    @State private var imageToShare: UIImage? = nil
+    @State private var showDeleteAlert = false
+    
+    var body: some View {
+        ZStack {
+            // 黑色背景
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            // 照片轮播
+            TabView(selection: $currentIndex) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                    ZStack {
+                        Color.black
+                        
+                        SafeAsyncImage(url: URL(string: photo.url)) { image in
+                            image
+                                .resizable()
+                                .scaledToFit()
+                                .scaleEffect(scale)
+                                .gesture(
+                                    MagnificationGesture()
+                                        .onChanged { value in
+                                            scale = value
+                                        }
+                                        .onEnded { _ in
+                                            withAnimation {
+                                                scale = 1.0
+                                            }
+                                        }
+                                )
+                                .onTapGesture {
+                                    withAnimation {
+                                        showControls.toggle()
+                                    }
+                                }
+                        } placeholder: {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.5)
+                        }
+                    }
+                    .tag(index)
+                }
+            }
+            .tabViewStyle(PageTabViewStyle(indexDisplayMode: .automatic))
+            .indexViewStyle(PageIndexViewStyle(backgroundDisplayMode: .always))
+            
+            // 顶部控制栏
+            if showControls {
+                VStack {
+                    HStack {
+                        Button(action: onDismiss) {
+                            Image(systemName: "xmark")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Circle().fill(Color.black.opacity(0.5)))
+                        }
+                        
+                        Spacer()
+                        
+                        Text("\(currentIndex + 1) / \(photos.count)")
+                            .foregroundColor(.white)
+                            .font(.subheadline)
+                            .padding(8)
+                            .background(Capsule().fill(Color.black.opacity(0.5)))
+                        
+                        Spacer()
+                        
+                        HStack(spacing: 16) {
+                            Button(action: {
+                                if currentIndex < photos.count {
+                                    loadImageForSharing(from: photos[currentIndex].url)
+                                }
+                            }) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                            }
+                            
+                            Button(action: {
+                                showDeleteAlert = true
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Circle().fill(Color.red.opacity(0.5)))
+                            }
+                        }
+                    }
+                    .padding()
+                    
+                    Spacer()
+                }
+                .transition(.opacity)
+            }
+        }
+        .onAppear {
+            // 设置初始照片索引
+            if let initialPhoto = initialPhoto, let index = photos.firstIndex(where: { $0.id == initialPhoto.id }) {
+                currentIndex = index
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let image = imageToShare {
+                ShareSheet(items: [image])
+            }
+        }
+        .alert("删除照片", isPresented: $showDeleteAlert) {
+            Button("取消", role: .cancel) {}
+            
+            Button("删除", role: .destructive) {
+                if currentIndex < photos.count {
+                    onDelete(photos[currentIndex])
+                    
+                    // 处理删除后可能的边界情况
+                    if photos.count <= 1 {
+                        onDismiss() // 如果删除后没有照片了，直接关闭预览
+                    } else if currentIndex >= photos.count - 1 {
+                        // 如果删除的是最后一张，显示前一张
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            currentIndex = max(0, photos.count - 2)
+                        }
+                    }
+                }
+            }
+        } message: {
+            Text("确定要删除这张照片吗？此操作不可撤销。")
+        }
+    }
+    
+    private func loadImageForSharing(from urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            guard let data = data, error == nil,
+                  let uiImage = UIImage(data: data) else {
+                return
+            }
+            
+            DispatchQueue.main.async {
+                self.imageToShare = uiImage
+                self.showShareSheet = true
+            }
+        }.resume()
+    }
+}
+
+// 分享表单
+struct ShareSheet: UIViewControllerRepresentable {
+    var items: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // Model for location photo collections
@@ -2024,7 +2636,7 @@ struct LocationPhotoCollection: Identifiable, Hashable {
     let id = UUID()
     let name: String
     let coordinate: CLLocationCoordinate2D
-    let photos: [PhotoItem]
+    var photos: [PhotoItem] // 改为可变数组
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
@@ -2032,6 +2644,17 @@ struct LocationPhotoCollection: Identifiable, Hashable {
     
     static func == (lhs: LocationPhotoCollection, rhs: LocationPhotoCollection) -> Bool {
         lhs.id == rhs.id
+    }
+    
+    // 删除单张照片
+    mutating func removePhoto(_ photo: PhotoItem) {
+        photos.removeAll { $0.id == photo.id }
+    }
+    
+    // 批量删除照片
+    mutating func removePhotos(_ photosToDelete: [PhotoItem]) {
+        let idsToDelete = Set(photosToDelete.map { $0.id })
+        photos.removeAll { idsToDelete.contains($0.id) }
     }
 }
 
